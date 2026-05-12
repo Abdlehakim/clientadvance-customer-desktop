@@ -33,9 +33,9 @@ function persistUser(user: User | null) {
 }
 
 export const authLocalRepository: AuthRepository = {
-  async login(email, password) {
+  async login(identifier, password) {
     await initializeOfflineAuthStorage();
-    const result = await authenticateOfflineCredential(email, password);
+    const result = await authenticateOfflineCredential(identifier, password);
 
     if (result.status === "missing") {
       throw new Error(OFFLINE_LOGIN_UNAVAILABLE_MESSAGE);

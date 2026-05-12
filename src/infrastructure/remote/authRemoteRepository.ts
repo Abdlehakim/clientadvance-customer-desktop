@@ -33,6 +33,7 @@ interface RemoteUser {
   role: "admin" | "employe";
   company_id?: string | null;
   company_name?: string | null;
+  company_status?: "active" | "suspended" | "archived" | null;
   company_contact_email?: string | null;
   company_contact_phone?: string | null;
   company_admin_name?: string | null;
@@ -103,14 +104,18 @@ async function persistOfflineLoginArtifacts(
 }
 
 export const authRemoteRepository: AuthRepository = {
-  async login(email, password) {
-    const normalizedEmail = email.trim().toLowerCase();
+  async login(identifier, password) {
+    const normalizedIdentifier = identifier.trim().toLowerCase();
 
     if (isConnectionOnline()) {
       try {
         const response = await apiFetch<LoginResponse>("/auth/login", {
           method: "POST",
-          body: JSON.stringify({ email: normalizedEmail, password }),
+          body: JSON.stringify({
+            identifier: normalizedIdentifier,
+            email: normalizedIdentifier,
+            password,
+          }),
         });
 
         setAuthToken(response.token);
@@ -126,7 +131,7 @@ export const authRemoteRepository: AuthRepository = {
       }
     }
 
-    const localResult = await authenticateOfflineCredential(normalizedEmail, password);
+    const localResult = await authenticateOfflineCredential(normalizedIdentifier, password);
 
     if (localResult.status === "missing") {
       throw new Error(OFFLINE_LOGIN_UNAVAILABLE_MESSAGE);

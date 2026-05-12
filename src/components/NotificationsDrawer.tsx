@@ -11,6 +11,7 @@ import {
   getCurrentUser,
   getNotifications,
 } from "@/lib/data";
+import { deliverNotificationById } from "@/services/notificationDeliveryService";
 
 function statusLabel(status?: string) {
   if (status === "sending") {
@@ -52,6 +53,7 @@ export function NotificationsDrawer({
   onOpenChange: (v: boolean) => void;
 }) {
   const [isClearingSent, setIsClearingSent] = useState(false);
+  const [retryingNotificationId, setRetryingNotificationId] = useState<string | null>(null);
   const settings = getAdminSettings();
   const currentUser = getCurrentUser();
   const isAdminUser = currentUser?.role === "admin";
@@ -84,6 +86,33 @@ export function NotificationsDrawer({
       );
     } finally {
       setIsClearingSent(false);
+    }
+  };
+
+  const onRetryNotification = async (notificationId: string) => {
+    setRetryingNotificationId(notificationId);
+
+    try {
+      const result = await deliverNotificationById(notificationId, {
+        backendAvailable: false,
+        retryFailed: true,
+      });
+
+      if (result.status === "sent") {
+        toast.success("Notification email envoyée.");
+      } else if (result.status === "failed") {
+        toast.error(
+          result.errorMessage
+            ? `Échec d'envoi email : ${result.errorMessage}`
+            : "Échec d'envoi email.",
+        );
+      } else if (result.offline) {
+        toast("Notification en attente. Elle sera envoyée lorsque la connexion sera disponible.");
+      } else if (result.backendRequired) {
+        toast("Cette notification doit être envoyée par le serveur backend.");
+      }
+    } finally {
+      setRetryingNotificationId(null);
     }
   };
 
@@ -163,6 +192,20 @@ export function NotificationsDrawer({
                       <p className="mt-2 text-xs text-destructive">
                         {notification.error_message}
                       </p>
+                    ) : null}
+                    {isEmail && notification.status === "failed" ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="mt-2"
+                        disabled={retryingNotificationId === notification.id}
+                        onClick={() => void onRetryNotification(notification.id)}
+                      >
+                        {retryingNotificationId === notification.id
+                          ? "Nouvel envoi..."
+                          : "Réessayer"}
+                      </Button>
                     ) : null}
                   </div>
                 );

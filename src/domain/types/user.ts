@@ -8,6 +8,7 @@ export interface User {
   role: Role;
   company_id?: string | null;
   company_name?: string | null;
+  company_status?: "active" | "suspended" | "archived" | null;
   company_contact_email?: string | null;
   company_contact_phone?: string | null;
   company_admin_name?: string | null;

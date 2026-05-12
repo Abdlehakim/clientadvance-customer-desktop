@@ -6,6 +6,7 @@ import {
 } from "@/infrastructure/local/adminSettingsState";
 import { getStoredSmtpPassword } from "@/infrastructure/local/smtpPasswordStorage";
 import { sendDesktopEmail } from "@/infrastructure/local/sqlite/desktopEmailClient";
+import { isTauriRuntime } from "@/infrastructure/local/sqlite/sqliteClient";
 import {
   cleanupOldSentNotifications,
   getAdminSettings,
@@ -13,7 +14,6 @@ import {
   initializeStorageDriver,
   isOnline,
   notificationService,
-  useSQLiteStorage,
 } from "./appServices";
 
 const MISSING_SMTP_MESSAGE =
@@ -40,6 +40,7 @@ export interface NotificationDeliveryResult {
 
 interface NotificationDeliveryOptions {
   backendAvailable: boolean;
+  retryFailed?: boolean;
 }
 
 export interface SingleNotificationDeliveryResult {
@@ -208,7 +209,7 @@ async function deliverDesktopEmailNotification(
   result.attempted = true;
   result.usedDesktopEmail = true;
 
-  if (!useSQLiteStorage) {
+  if (!isTauriRuntime()) {
     await markNotificationAsFailed(notification.id, DESKTOP_EMAIL_UNAVAILABLE_MESSAGE);
     result.status = "failed";
     result.errorMessage = DESKTOP_EMAIL_UNAVAILABLE_MESSAGE;
@@ -269,7 +270,11 @@ export async function deliverNotificationById(
     (candidate) => candidate.id === notificationId,
   );
 
-  if (!notification || !isNotificationPendingDelivery(notification)) {
+  if (
+    !notification ||
+    (!isNotificationPendingDelivery(notification) &&
+      !(options.retryFailed === true && notification.status === "failed"))
+  ) {
     return result;
   }
 

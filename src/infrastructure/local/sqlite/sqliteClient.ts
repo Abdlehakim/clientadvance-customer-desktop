@@ -35,25 +35,38 @@ interface TauriInvoke {
 declare global {
   interface Window {
     __TAURI__?: {
+      invoke?: TauriInvoke;
       core?: {
         invoke?: TauriInvoke;
       };
+    };
+    __TAURI_INTERNALS__?: {
+      invoke?: TauriInvoke;
     };
   }
 }
 
 let sqliteInitPromise: Promise<SqliteDatabaseInfo> | null = null;
 
+function getTauriInvoke() {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  const invoke =
+    window.__TAURI__?.core?.invoke ??
+    window.__TAURI__?.invoke ??
+    window.__TAURI_INTERNALS__?.invoke;
+
+  return typeof invoke === "function" ? invoke : null;
+}
+
 export function isTauriRuntime() {
-  return (
-    typeof window !== "undefined" &&
-    "__TAURI__" in window &&
-    typeof window.__TAURI__?.core?.invoke === "function"
-  );
+  return getTauriInvoke() !== null;
 }
 
 function getInvoke() {
-  const invoke = window.__TAURI__?.core?.invoke;
+  const invoke = getTauriInvoke();
 
   if (!invoke) {
     throw new Error("Tauri runtime not available. SQLite storage requires the desktop app.");
@@ -84,15 +97,7 @@ function extractInvokeErrorMessage(error: unknown): string {
       return maybeError;
     }
 
-    try {
-      const serialized = JSON.stringify(error);
-
-      if (serialized && serialized !== "{}") {
-        return serialized;
-      }
-    } catch {
-      // Ignore serialization errors and fall through to the generic message.
-    }
+    return "Tauri command failed.";
   }
 
   return "Tauri command failed.";

@@ -163,7 +163,8 @@ const GMAIL_APP_PASSWORD_HINT =
   "Pour Gmail, utilisez un mot de passe d'application, pas le mot de passe normal du compte Gmail.";
 
 export const getCurrentUser = () => authService.getCurrentUser();
-export const login = (email: string, password: string) => authService.login(email, password);
+export const login = (identifier: string, password: string) =>
+  authService.login(identifier, password);
 export const logout = () => authService.logout();
 
 type DailyScopeDateField<T> =

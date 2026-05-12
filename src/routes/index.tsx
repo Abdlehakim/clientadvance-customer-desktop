@@ -73,7 +73,7 @@ function LoginPage() {
             <Label htmlFor="email">Email ou identifiant</Label>
             <Input
               id="email"
-              type="email"
+              type="text"
               value={email}
               onChange={(event) => setEmail(event.target.value)}
               placeholder="vous@exemple.com"
