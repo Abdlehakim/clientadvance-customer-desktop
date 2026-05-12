@@ -1,4 +1,8 @@
 import { isBrowser } from "@/infrastructure/local/localStorageDatabase";
+import {
+  recordApiConnectionFailure,
+  recordApiConnectionSuccess,
+} from "@/services/connectionService";
 
 const env = import.meta.env as ImportMetaEnv & {
   VITE_API_BASE_URL?: string;
@@ -99,8 +103,11 @@ export async function apiFetch<T = unknown>(path: string, init: RequestInit = {}
       headers,
     });
   } catch (error) {
+    recordApiConnectionFailure();
     throw new ApiError(0, null, error instanceof Error ? error.message : "Serveur indisponible");
   }
+
+  recordApiConnectionSuccess();
 
   const text = await response.text();
   const payload = text ? safeJson(text) : null;

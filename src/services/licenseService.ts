@@ -23,7 +23,11 @@ import {
   buildApiUrl,
   getApiPayloadMessage,
 } from "@/infrastructure/remote/apiClient";
-import { isConnectionOnline } from "@/services/connectionService";
+import {
+  isConnectionOnline,
+  recordApiConnectionFailure,
+  recordApiConnectionSuccess,
+} from "@/services/connectionService";
 import { initializeStorageDriver, useSQLiteStorage } from "./appServices";
 import { persistOwnerControlledAdminModes } from "./ownerControlledModeService";
 
@@ -896,12 +900,15 @@ async function requestLicenseCheck(state: LicenseState, deviceId: string) {
       body: JSON.stringify(payload),
     });
   } catch (error) {
+    recordApiConnectionFailure();
     throw new ApiError(
       0,
       null,
       error instanceof Error ? error.message : LICENSE_ACTIVATION_FAILED_MESSAGE,
     );
   }
+
+  recordApiConnectionSuccess();
 
   const rawText = await response.text();
   const responsePayload = rawText ? safeJson(rawText) : null;
@@ -944,6 +951,7 @@ async function requestLicenseActivation(input: LicenseActivationInput, deviceId:
       body: JSON.stringify(payload),
     });
   } catch (error) {
+    recordApiConnectionFailure();
     const message =
       error instanceof Error && error.message.trim().length > 0
         ? error.message
@@ -952,6 +960,8 @@ async function requestLicenseActivation(input: LicenseActivationInput, deviceId:
     logLicenseActivationError("activation network error", { url, message });
     throw new ApiError(0, null, message);
   }
+
+  recordApiConnectionSuccess();
 
   const rawText = await response.text();
   const responsePayload = rawText ? safeJson(rawText) : null;
