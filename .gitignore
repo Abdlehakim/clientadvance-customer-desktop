@@ -1,0 +1,6 @@
+node_modules/
+.env
+dist/
+build/.wrangler/.tanstack/
+src-tauri/target/
+*.log
