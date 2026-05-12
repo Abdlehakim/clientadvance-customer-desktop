@@ -18,9 +18,15 @@ import { toast } from "sonner";
 
 interface DatabaseLocationCardProps {
   className?: string;
+  description?: string;
+  onLocationChange?: (location: SqliteDatabaseInfo | null) => void;
 }
 
-export function DatabaseLocationCard({ className }: DatabaseLocationCardProps) {
+export function DatabaseLocationCard({
+  className,
+  description = "Ouvrir l'emplacement du fichier de base de données SQLite utilisé par l'application.",
+  onLocationChange,
+}: DatabaseLocationCardProps) {
   const isDesktopApp = isTauriRuntime();
   const [databaseLocation, setDatabaseLocation] = useState<SqliteDatabaseInfo | null>(null);
   const [isOpeningDatabaseLocation, setIsOpeningDatabaseLocation] = useState(false);
@@ -29,6 +35,7 @@ export function DatabaseLocationCard({ className }: DatabaseLocationCardProps) {
   useEffect(() => {
     if (!isDesktopApp) {
       setDatabaseLocation(null);
+      onLocationChange?.(null);
       return;
     }
 
@@ -38,6 +45,7 @@ export function DatabaseLocationCard({ className }: DatabaseLocationCardProps) {
       .then((location) => {
         if (!cancelled) {
           setDatabaseLocation(location);
+          onLocationChange?.(location);
         }
       })
       .catch((error) => {
@@ -47,7 +55,7 @@ export function DatabaseLocationCard({ className }: DatabaseLocationCardProps) {
     return () => {
       cancelled = true;
     };
-  }, [isDesktopApp]);
+  }, [isDesktopApp, onLocationChange]);
 
   const handleOpenDatabaseLocation = async () => {
     if (!isDesktopApp) {
@@ -98,6 +106,7 @@ export function DatabaseLocationCard({ className }: DatabaseLocationCardProps) {
       }
 
       setDatabaseLocation(result.location);
+      onLocationChange?.(result.location);
       toast.success(
         "Emplacement de la base de données modifié avec succès. Redémarrez l'application pour appliquer complètement le changement.",
       );
@@ -111,10 +120,7 @@ export function DatabaseLocationCard({ className }: DatabaseLocationCardProps) {
   return (
     <Card className={cn("p-6 shadow-card", className)}>
       <h3 className="font-semibold">Base de données locale</h3>
-      <p className="mt-2 text-sm text-muted-foreground">
-        Ouvrir l'emplacement du fichier de base de données SQLite utilisé par
-        l'application.
-      </p>
+      <p className="mt-2 text-sm text-muted-foreground">{description}</p>
       {isDesktopApp ? (
         <div className="mt-4 space-y-1.5">
           <Label>Emplacement actuel</Label>
@@ -126,9 +132,7 @@ export function DatabaseLocationCard({ className }: DatabaseLocationCardProps) {
           disabled={!isDesktopApp || isOpeningDatabaseLocation || isChangingDatabaseLocation}
           onClick={() => void handleOpenDatabaseLocation()}
         >
-          {isOpeningDatabaseLocation
-            ? "Ouverture..."
-            : "Ouvrir le dossier de la base de données"}
+          {isOpeningDatabaseLocation ? "Ouverture..." : "Ouvrir le dossier de la base de données"}
         </Button>
         <Button
           disabled={!isDesktopApp || isOpeningDatabaseLocation || isChangingDatabaseLocation}
