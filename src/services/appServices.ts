@@ -637,7 +637,9 @@ export async function clearSentNotifications() {
 }
 
 function usesServerModeForEmployees() {
-  return getServerMode() === "with-server";
+  // Remote auth requires employee credentials to exist on app-server even when
+  // business data sync/notifications are configured for without-server mode.
+  return !useLocalAuth || getServerMode() === "with-server";
 }
 
 export const getEmployeeAccounts = async (): Promise<EmployeeAccountListResult> => {
