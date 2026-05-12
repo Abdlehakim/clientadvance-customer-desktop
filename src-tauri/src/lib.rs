@@ -33,6 +33,23 @@ const DATABASE_CONFIG_FILE_NAME: &str = "database-location.json";
 const DEVICE_IDENTITY_FILE_NAME: &str = "device-identity.json";
 const DATABASE_TEMP_FILE_NAME: &str = "gestion-facile.db.tmp";
 const DATABASE_DEFAULT_FOLDER_NAME: &str = "Gestion Facile";
+#[cfg(debug_assertions)]
+const DEVTOOLS_F12_HOTKEY_SCRIPT: &str = r#"
+;(function () {
+  document.addEventListener(
+    'keydown',
+    function (event) {
+      if (event.repeat || event.code !== 'F12') {
+        return
+      }
+
+      event.preventDefault()
+      window.__TAURI_INTERNALS__?.invoke('plugin:webview|internal_toggle_devtools')
+    },
+    true
+  )
+})()
+"#;
 const SQLITE_SCHEMA: &str = r#"
 PRAGMA foreign_keys = ON;
 
@@ -1459,7 +1476,14 @@ fn send_smtp_email(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-  tauri::Builder::default()
+  let mut builder = tauri::Builder::default();
+
+  #[cfg(debug_assertions)]
+  {
+    builder = builder.append_invoke_initialization_script(DEVTOOLS_F12_HOTKEY_SCRIPT);
+  }
+
+  builder
     .manage(DatabaseAccessState::default())
     .invoke_handler(tauri::generate_handler![
       sqlite_init,
