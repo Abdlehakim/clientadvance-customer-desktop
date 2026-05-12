@@ -6,6 +6,7 @@ export interface User {
   password: string; // kept empty in persisted session payloads
   name: string;
   role: Role;
+  is_active?: boolean;
   company_id?: string | null;
   company_name?: string | null;
   company_status?: "active" | "suspended" | "archived" | null;

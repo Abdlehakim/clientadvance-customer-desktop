@@ -31,6 +31,7 @@ interface RemoteUser {
   name: string;
   email: string;
   role: "admin" | "employe";
+  is_active?: boolean;
   company_id?: string | null;
   company_name?: string | null;
   company_status?: "active" | "suspended" | "archived" | null;
