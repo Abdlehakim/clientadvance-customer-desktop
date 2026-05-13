@@ -1,9 +1,19 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useEffectEvent, useState } from "react";
 import type { FormEvent } from "react";
-import { KeyRound, ShieldAlert, UserPlus } from "lucide-react";
+import { KeyRound, ShieldAlert, Trash2, UserPlus } from "lucide-react";
 import type { EmployeeAccount } from "@/domain/types";
 import { AppLayout } from "@/components/AppLayout";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -20,6 +30,7 @@ import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   createEmployeeAccount,
+  deleteEmployeeAccount,
   EMPLOYEE_LIMIT_REACHED_MESSAGE,
   formatDateFR,
   getAdminSettings,
@@ -49,11 +60,13 @@ function EmployeeManagementPage() {
   const [submitting, setSubmitting] = useState(false);
   const [busyUserId, setBusyUserId] = useState<string | null>(null);
   const [listStatusNote, setListStatusNote] = useState<string | null>(null);
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [passwordTarget, setPasswordTarget] = useState<EmployeeAccount | null>(null);
   const [nextPassword, setNextPassword] = useState("");
+  const [employeeToDelete, setEmployeeToDelete] = useState<EmployeeAccount | null>(null);
 
   const refreshEmployees = useEffectEvent(async () => {
     setLoading(true);
@@ -109,6 +122,24 @@ function EmployeeManagementPage() {
     setPassword("");
   };
 
+  const onAddEmployee = () => {
+    if (employeeLimitReached) {
+      toast.error(EMPLOYEE_LIMIT_REACHED_MESSAGE);
+      return;
+    }
+
+    resetForm();
+    setCreateDialogOpen(true);
+  };
+
+  const onCreateDialogOpenChange = (open: boolean) => {
+    setCreateDialogOpen(open);
+
+    if (!open) {
+      resetForm();
+    }
+  };
+
   const onCreate = async (event: FormEvent) => {
     event.preventDefault();
 
@@ -126,6 +157,7 @@ function EmployeeManagementPage() {
         password,
         role: "employe",
       });
+      setCreateDialogOpen(false);
       resetForm();
       toast.success(
         serverMode === "without-server"
@@ -178,84 +210,50 @@ function EmployeeManagementPage() {
     }
   };
 
+  const onDeleteEmployee = async () => {
+    if (!employeeToDelete) {
+      return;
+    }
+
+    if (employeeToDelete.id === user?.id) {
+      toast.error("Impossible de supprimer l’employé.");
+      setEmployeeToDelete(null);
+      return;
+    }
+
+    setBusyUserId(employeeToDelete.id);
+
+    try {
+      await deleteEmployeeAccount(employeeToDelete.id);
+      toast.success("Employé supprimé.");
+      setEmployeeToDelete(null);
+      await refreshEmployees();
+    } catch {
+      toast.error("Impossible de supprimer l’employé.");
+      setEmployeeToDelete(null);
+    } finally {
+      setBusyUserId(null);
+    }
+  };
+
   return (
     <AppLayout>
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold tracking-tight">Gestion des employés</h1>
-        <p className="text-sm text-muted-foreground">
-          Création et gestion des comptes employés par l’administrateur
-        </p>
+      <div className="mb-6 flex items-center justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">Gestion des employés</h1>
+          <p className="text-sm text-muted-foreground">
+            Création et gestion des comptes employés par l’administrateur
+          </p>
+          {employeeLimitReached ? (
+            <p className="mt-1 text-sm text-destructive">{EMPLOYEE_LIMIT_REACHED_MESSAGE}</p>
+          ) : null}
+        </div>
+        <Button onClick={onAddEmployee} disabled={employeeLimitReached}>
+          <UserPlus className="mr-2 h-4 w-4" /> Ajouter un employé
+        </Button>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[420px_minmax(0,1fr)]">
-        <Card className="p-6 shadow-card">
-          <div className="mb-4 flex items-center gap-2">
-            <UserPlus className="h-5 w-5 text-primary" />
-            <h2 className="font-semibold">Ajouter un employé</h2>
-          </div>
-          <p className="mb-4 text-sm text-muted-foreground">
-            {serverMode === "with-server"
-              ? "Le compte est créé sur le serveur puis enregistré localement sur cet appareil."
-              : "Le compte est créé localement sur cet appareil, sans synchronisation backend."}
-          </p>
-
-          <form className="space-y-4" onSubmit={onCreate}>
-            <div className="space-y-1.5">
-              <Label htmlFor="employee-name">Nom</Label>
-              <Input
-                id="employee-name"
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                disabled={submitting || employeeLimitReached}
-                required
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="employee-email">Email</Label>
-              <Input
-                id="employee-email"
-                type="email"
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-                disabled={submitting || employeeLimitReached}
-                required
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="employee-password">Mot de passe</Label>
-              <Input
-                id="employee-password"
-                type="password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                disabled={submitting || employeeLimitReached}
-                minLength={6}
-                required
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="employee-role">Rôle</Label>
-              <Input id="employee-role" value="employe" disabled readOnly />
-            </div>
-
-            {employeeLimitReached ? (
-              <p className="text-sm text-destructive">{EMPLOYEE_LIMIT_REACHED_MESSAGE}</p>
-            ) : null}
-
-            <div className="flex gap-2 pt-2">
-              <Button type="submit" disabled={submitting || employeeLimitReached}>
-                Enregistrer
-              </Button>
-              <Button type="button" variant="outline" onClick={resetForm} disabled={submitting}>
-                Annuler
-              </Button>
-            </div>
-          </form>
-        </Card>
-
+      <div className="grid grid-cols-1 gap-6">
         <Card className="p-4 shadow-card">
           <div className="mb-4 flex items-center justify-between gap-3">
             <div>
@@ -340,6 +338,17 @@ function EmployeeManagementPage() {
                             <KeyRound className="mr-2 h-4 w-4" />
                             Mot de passe
                           </Button>
+                          {user?.role === "admin" && employee.id !== user.id ? (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => setEmployeeToDelete(employee)}
+                              disabled={busyUserId === employee.id}
+                            >
+                              <Trash2 className="h-4 w-4 text-destructive" />
+                            </Button>
+                          ) : null}
                         </div>
                       </TableCell>
                     </TableRow>
@@ -350,6 +359,99 @@ function EmployeeManagementPage() {
           </div>
         </Card>
       </div>
+
+      <AlertDialog
+        open={employeeToDelete !== null}
+        onOpenChange={(value) => !value && setEmployeeToDelete(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Supprimer cet employé ?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {"Cette action est irréversible. Le compte « "}
+              {employeeToDelete?.name}
+              {" » sera supprimé."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Annuler</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(event) => {
+                event.preventDefault();
+                void onDeleteEmployee();
+              }}
+              disabled={busyUserId === employeeToDelete?.id}
+            >
+              Supprimer
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <Dialog open={createDialogOpen} onOpenChange={onCreateDialogOpenChange}>
+        <DialogContent className="sm:max-w-[480px]">
+          <DialogHeader>
+            <DialogTitle>Ajouter un employé</DialogTitle>
+          </DialogHeader>
+
+          <form className="space-y-4 py-2" onSubmit={onCreate}>
+            <div className="space-y-1.5">
+              <Label htmlFor="employee-name">Nom</Label>
+              <Input
+                id="employee-name"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                disabled={submitting || employeeLimitReached}
+                required
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="employee-email">Email</Label>
+              <Input
+                id="employee-email"
+                type="email"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                disabled={submitting || employeeLimitReached}
+                required
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="employee-password">Mot de passe</Label>
+              <Input
+                id="employee-password"
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                disabled={submitting || employeeLimitReached}
+                minLength={6}
+                required
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="employee-role">Rôle</Label>
+              <Input id="employee-role" value="employe" disabled readOnly />
+            </div>
+
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => onCreateDialogOpenChange(false)}
+                disabled={submitting}
+              >
+                Annuler
+              </Button>
+              <Button type="submit" disabled={submitting || employeeLimitReached}>
+                Enregistrer
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={passwordTarget !== null}

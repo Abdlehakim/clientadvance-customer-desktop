@@ -812,7 +812,9 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
               variant="outline"
               size="sm"
               onClick={() => setNotifOpen(true)}
-              className="relative"
+              className="relative h-8 w-8 p-0"
+              aria-label="Notifications"
+              title="Notifications"
             >
               <Bell className="h-4 w-4" />
               {visibleNotifications.length > 0 && (
@@ -822,8 +824,14 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
               )}
             </Button>
             {isAdminUser && (
-              <Button size="sm" onClick={() => void onSync()}>
-                <RefreshCw className="mr-2 h-4 w-4" /> Synchroniser maintenant
+              <Button
+                size="sm"
+                onClick={() => void onSync()}
+                className="h-8 w-8 p-0"
+                aria-label="Synchroniser"
+                title="Synchroniser"
+              >
+                <RefreshCw className="h-4 w-4" />
               </Button>
             )}
           </div>

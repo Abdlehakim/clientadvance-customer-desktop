@@ -9,6 +9,7 @@
  */
 import {
   createLocalEmployeeAccount,
+  deleteLocalEmployeeAccount,
   initializeOfflineAuthStorage,
   listLocalEmployeeAccounts,
   resetLocalEmployeeAccounts,
@@ -769,6 +770,40 @@ export const updateEmployeeAccount = async (
   } catch (error) {
     if (error instanceof ApiError && error.status === 0) {
       throw new Error("Impossible de mettre à jour l’employé sur le serveur.");
+    }
+
+    throw error;
+  }
+};
+
+export const deleteEmployeeAccount = async (id: string): Promise<void> => {
+  const currentUser = getCurrentUser();
+
+  if (!isAdmin(currentUser)) {
+    throw new Error("AccÃ¨s refusÃ©. Cette section est rÃ©servÃ©e Ã  l'administrateur.");
+  }
+
+  if (currentUser?.id === id) {
+    throw new Error("Impossible de supprimer l'utilisateur connectÃ©.");
+  }
+
+  if (!usesServerModeForEmployees()) {
+    await deleteLocalEmployeeAccount(id);
+    return;
+  }
+
+  try {
+    await userRemoteService.delete(id);
+
+    try {
+      await deleteLocalEmployeeAccount(id);
+    } catch {
+      // The backend is authoritative in server mode; the local credential cache
+      // may not contain the employee yet.
+    }
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 0) {
+      throw new Error("Impossible de supprimer lâ€™employÃ© sur le serveur.");
     }
 
     throw error;

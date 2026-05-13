@@ -122,8 +122,8 @@ function ClientsPage() {
                 <TableHead>{"T\u00e9l\u00e9phone"}</TableHead>
                 <TableHead>Email</TableHead>
                 <TableHead>CIN</TableHead>
-                <TableHead>Synchronisation locale</TableHead>
-                <TableHead>Synchronisation serveur</TableHead>
+                <TableHead>Syn.L</TableHead>
+                <TableHead>Syn.S</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>

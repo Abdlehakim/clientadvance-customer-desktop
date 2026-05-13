@@ -21,4 +21,9 @@ export const userRemoteService = {
       body: JSON.stringify(patch),
     });
   },
+  delete(id: string) {
+    return apiFetch<void>(`/users/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+  },
 };

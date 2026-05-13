@@ -16,7 +16,7 @@ export {
   changeLocalDatabaseLocation, chooseLocalDatabaseFolder, getLocalDatabaseLocation, openLocalDatabaseLocation,
   getActivityLogs, getNotifications,
   cleanupOldSentNotifications, clearSentNotifications,
-  getEmployeeAccounts, createEmployeeAccount, updateEmployeeAccount,
+  getEmployeeAccounts, createEmployeeAccount, updateEmployeeAccount, deleteEmployeeAccount,
   MAX_EMPLOYEES, EMPLOYEE_LIMIT_REACHED_MESSAGE, getEmployeeCount, hasReachedEmployeeLimit,
   isAdmin, isEmployee, isSameLocalDay, filterForCurrentUserDailyScope,
   isOnline, setOnline, getLastSync, getPendingCount, syncPendingData,

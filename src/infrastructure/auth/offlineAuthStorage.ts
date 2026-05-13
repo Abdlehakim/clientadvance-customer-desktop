@@ -668,6 +668,19 @@ async function upsertLocalStorageOfflineAuthRecord(record: OfflineAuthRecord) {
   writeLocalStorageRecords([record, ...records]);
 }
 
+async function deleteOfflineAuthRecordById(id: string) {
+  if (usesSqliteCredentialStore()) {
+    const db = await getDb();
+    await db.execute("DELETE FROM local_users WHERE id = ? AND role = 'employe'", [id]);
+    return;
+  }
+
+  const records = readLocalStorageRecords().filter(
+    (record) => !(record.id === id && record.role === "employe"),
+  );
+  writeLocalStorageRecords(records);
+}
+
 async function getOfflineAuthRecordByEmail(email: string) {
   if (usesSqliteCredentialStore()) {
     return getSqliteOfflineAuthRecordByEmail(email);
@@ -819,6 +832,17 @@ export async function resetLocalEmployeeAccounts() {
     const records = readLocalStorageRecords().filter((record) => record.role !== "employe");
     writeLocalStorageRecords(records);
   }
+}
+
+export async function deleteLocalEmployeeAccount(id: string) {
+  await initializeOfflineAuthStorage();
+  const existing = await getOfflineAuthRecordById(id);
+
+  if (!existing || existing.role !== "employe") {
+    throw new Error("Utilisateur local introuvable");
+  }
+
+  await deleteOfflineAuthRecordById(id);
 }
 
 export async function createLocalEmployeeAccount(
