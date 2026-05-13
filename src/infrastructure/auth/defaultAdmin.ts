@@ -8,20 +8,24 @@ const env = import.meta.env as ImportMetaEnv & {
 };
 
 export function isDemoAdminEnabled() {
-  return env.VITE_DEMO_ADMIN_ENABLED === "true" || !import.meta.env.PROD;
+  return (
+    env.VITE_DEMO_ADMIN_ENABLED === "true" &&
+    typeof env.DEFAULT_ADMIN_EMAIL === "string" &&
+    env.DEFAULT_ADMIN_EMAIL.trim().length > 0 &&
+    typeof env.DEFAULT_ADMIN_PASSWORD === "string" &&
+    env.DEFAULT_ADMIN_PASSWORD.trim().length > 0
+  );
 }
 
-// Development/demo defaults only. Production must create company admins from
-// the owner interface and should keep demo admin creation disabled.
-export const DEFAULT_ADMIN_EMAIL = (
-  env.DEFAULT_ADMIN_EMAIL ?? "admin@demo.com"
-).trim().toLowerCase();
-export const DEFAULT_ADMIN_PASSWORD = env.DEFAULT_ADMIN_PASSWORD ?? "admin123";
+// Local fallback admin creation is disabled unless explicit credentials are
+// provided through environment variables.
+export const DEFAULT_ADMIN_EMAIL = (env.DEFAULT_ADMIN_EMAIL ?? "").trim().toLowerCase();
+export const DEFAULT_ADMIN_PASSWORD = env.DEFAULT_ADMIN_PASSWORD ?? "";
 export const DEFAULT_ADMIN_NAME = (
-  env.DEFAULT_ADMIN_NAME ?? "Admin Principal"
+  env.DEFAULT_ADMIN_NAME ?? "Admin"
 ).trim();
 
-export const DEFAULT_ADMIN_ID = "local_admin_demo";
+export const DEFAULT_ADMIN_ID = "local_admin";
 export const DEFAULT_ADMIN_ROLE: Role = "admin";
 export const DEFAULT_ADMIN_ACTIVE = true;
 
@@ -32,7 +36,7 @@ export function createDefaultAdminUser(): User {
     password: "",
     name: DEFAULT_ADMIN_NAME,
     role: DEFAULT_ADMIN_ROLE,
-    company_id: "company_demo",
-    company_name: "Demo",
+    company_id: null,
+    company_name: null,
   };
 }
