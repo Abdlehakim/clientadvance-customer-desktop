@@ -168,7 +168,7 @@ const EMPTY_SETTINGS: AdminSettings = {
   setup_completed: false,
   server_mode: "with-server",
   notification_delivery_mode: "backend",
-  smtp_provider_type: "custom",
+  smtp_provider_type: "gmail",
   smtp_host: "",
   smtp_port: 587,
   smtp_username: "",

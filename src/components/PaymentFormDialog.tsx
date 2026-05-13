@@ -4,10 +4,22 @@ import { schedulePaymentNotifications } from "@/services/notificationDeliverySch
 import { readNotificationDeliveryMode } from "@/infrastructure/local/adminSettingsState";
 import { createPayment, getAdminSettings, getClients } from "@/lib/data";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 export function PaymentFormDialog({
   open,
@@ -72,10 +84,9 @@ export function PaymentFormDialog({
     try {
       const settings = getAdminSettings();
       const shouldUseDesktopEmail =
-        readNotificationDeliveryMode(
-          settings.notification_delivery_mode,
-          settings.server_mode,
-        ) === "desktop-email";
+        readNotificationDeliveryMode(settings.notification_delivery_mode, settings.server_mode) ===
+        "desktop-email";
+
       const payment = await createPayment({
         client_id: clientId,
         montant: parsedAmount,
@@ -90,9 +101,7 @@ export function PaymentFormDialog({
         schedulePaymentNotifications(payment.id);
       }
     } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Impossible d'enregistrer le paiement.",
-      );
+      toast.error(error instanceof Error ? error.message : "Impossible d'enregistrer le paiement.");
     } finally {
       setIsSubmitting(false);
     }
@@ -100,10 +109,11 @@ export function PaymentFormDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[460px]">
+      <DialogContent className="sm:max-w-115">
         <DialogHeader>
           <DialogTitle>Ajouter un paiement</DialogTitle>
         </DialogHeader>
+
         <div className="space-y-4 py-2">
           <div className="space-y-1.5">
             <Label>Client *</Label>
@@ -119,10 +129,9 @@ export function PaymentFormDialog({
                 ))}
               </SelectContent>
             </Select>
-            {errors.clientId ? (
-              <p className="text-xs text-destructive">{errors.clientId}</p>
-            ) : null}
+            {errors.clientId ? <p className="text-xs text-destructive">{errors.clientId}</p> : null}
           </div>
+
           <div className="space-y-1.5">
             <Label>Montant payé (TND) *</Label>
             <Input
@@ -131,41 +140,26 @@ export function PaymentFormDialog({
               value={montant}
               onChange={(event) => setMontant(event.target.value)}
             />
-            {errors.montant ? (
-              <p className="text-xs text-destructive">{errors.montant}</p>
-            ) : null}
+            {errors.montant ? <p className="text-xs text-destructive">{errors.montant}</p> : null}
           </div>
+
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label>Date *</Label>
-              <Input
-                type="date"
-                value={date}
-                onChange={(event) => setDate(event.target.value)}
-              />
-              {errors.date ? (
-                <p className="text-xs text-destructive">{errors.date}</p>
-              ) : null}
+              <Input type="date" value={date} onChange={(event) => setDate(event.target.value)} />
+              {errors.date ? <p className="text-xs text-destructive">{errors.date}</p> : null}
             </div>
+
             <div className="space-y-1.5">
               <Label>Heure *</Label>
-              <Input
-                type="time"
-                value={heure}
-                onChange={(event) => setHeure(event.target.value)}
-              />
-              {errors.heure ? (
-                <p className="text-xs text-destructive">{errors.heure}</p>
-              ) : null}
+              <Input type="time" value={heure} onChange={(event) => setHeure(event.target.value)} />
+              {errors.heure ? <p className="text-xs text-destructive">{errors.heure}</p> : null}
             </div>
           </div>
         </div>
+
         <DialogFooter>
-          <Button
-            variant="outline"
-            onClick={() => onOpenChange(false)}
-            disabled={isSubmitting}
-          >
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
             Annuler
           </Button>
           <Button onClick={() => void submit()} disabled={isSubmitting}>

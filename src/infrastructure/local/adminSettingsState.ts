@@ -12,6 +12,7 @@ const env = import.meta.env as ImportMetaEnv & {
 };
 
 export const SMTP_PASSWORD_MASK = "********";
+export const DEFAULT_SMTP_PROVIDER_TYPE: SmtpProviderType = "gmail";
 export const DEFAULT_NOTIFICATION_RETENTION_DAYS = 30;
 export function isMaskedSmtpPasswordValue(value: unknown) {
   return typeof value === "string" && value.trim() === SMTP_PASSWORD_MASK;
@@ -89,7 +90,7 @@ export function isBackendSyncEnabled(
 export function readSmtpProviderType(value: unknown): SmtpProviderType {
   return value === "gmail" || value === "professional" || value === "custom"
     ? value
-    : "custom";
+    : DEFAULT_SMTP_PROVIDER_TYPE;
 }
 
 function readString(value: unknown, fallback = "") {
@@ -153,7 +154,7 @@ export function createAdminSettingsFallback(): AdminSettings {
     setup_completed: false,
     server_mode: serverMode,
     notification_delivery_mode: getNotificationDeliveryModeForServerMode(serverMode),
-    smtp_provider_type: "custom",
+    smtp_provider_type: DEFAULT_SMTP_PROVIDER_TYPE,
     smtp_host: "",
     smtp_port: 587,
     smtp_username: "",

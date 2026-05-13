@@ -1,11 +1,21 @@
 import { useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { Plus, Printer, Search } from "lucide-react";
+import { Plus, Printer, Search, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { AppLayout } from "@/components/AppLayout";
 import { PaymentFormDialog } from "@/components/PaymentFormDialog";
 import { PaymentNotificationStatusBadge } from "@/components/PaymentNotificationStatusBadge";
 import { PaymentSyncStatusBadge } from "@/components/PaymentSyncStatusBadge";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -24,11 +34,14 @@ import {
   formatTND,
   getAdminSettings,
   getClientReferenceById,
+  getCurrentUser,
   getLocalSyncStatus,
   getPaymentNotificationStatusMap,
   getPaymentNotificationStatuses,
   getPayments,
   getServerSyncStatus,
+  deletePayment,
+  isAdmin,
 } from "@/lib/data";
 import { formatTunisianPhoneForDisplay } from "@/lib/tunisianPhone";
 import { useAppData } from "@/lib/useAppData";
@@ -45,20 +58,20 @@ const NOTIFICATION_STATUS_LABELS: Record<PaymentNotificationDisplayStatus, strin
   queued: "En attente",
   sending: "En cours",
   failed: "Échec",
-  "not-created": "Non créé",
-  "not-applicable": "Non applicable",
+  "not-created": "N.C",
+  "not-applicable": "N.A",
 };
 
 const SYNC_STATUS_LABELS: Record<
   LocalPaymentSyncDisplayStatus | ServerPaymentSyncDisplayStatus,
   string
 > = {
-  "saved-local": "Enregistré localement",
+  "saved-local": "Eng.L",
   "failed-local": "Échec local",
   synced: "Synchronisé",
   pending: "En attente",
   failed: "Échec",
-  "not-applicable": "Non applicable",
+  "not-applicable": "N.A",
 };
 
 interface PaymentReceiptData {
@@ -332,6 +345,7 @@ function PaymentsPage() {
   const mounted = useHasMounted();
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
+  const [toDelete, setToDelete] = useState<Payment | null>(null);
 
   if (!mounted) {
     return <div className="min-h-screen w-full bg-background" />;
@@ -348,6 +362,7 @@ function PaymentsPage() {
   const settings = getAdminSettings();
   const notificationStatusMap = getPaymentNotificationStatusMap();
   const allPayments = getAllPayments();
+  const canDeletePayments = isAdmin(getCurrentUser());
 
   const onPrintPayment = (
     payment: Payment,
@@ -366,6 +381,20 @@ function PaymentsPage() {
       createdBy: payment.created_by,
       totalPaidToDate: getClientTotalPaidToDate(payment.client_id, allPayments),
     });
+  };
+
+  const onDeletePayment = async () => {
+    if (!toDelete) {
+      return;
+    }
+
+    try {
+      await deletePayment(toDelete.id);
+      toast.success("Paiement supprimé.");
+      setToDelete(null);
+    } catch {
+      toast.error("Impossible de supprimer le paiement.");
+    }
   };
 
   return (
@@ -403,10 +432,10 @@ function PaymentsPage() {
                 <TableHead>Date</TableHead>
                 <TableHead>Heure</TableHead>
                 <TableHead>{"Enregistr\u00e9 par"}</TableHead>
-                <TableHead>Statut email</TableHead>
-                <TableHead>Statut WhatsApp</TableHead>
-                <TableHead>Synchronisation locale</TableHead>
-                <TableHead>Synchronisation serveur</TableHead>
+                <TableHead>S.E</TableHead>
+                <TableHead>S.W</TableHead>
+                <TableHead>Syn.L</TableHead>
+                <TableHead>Syn.S</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -469,6 +498,23 @@ function PaymentsPage() {
                             </TooltipTrigger>
                             <TooltipContent>Imprimer le paiement</TooltipContent>
                           </Tooltip>
+                          {canDeletePayments ? (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  title="Supprimer le paiement"
+                                  aria-label="Supprimer le paiement"
+                                  onClick={() => setToDelete(payment)}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>Supprimer le paiement</TooltipContent>
+                            </Tooltip>
+                          ) : null}
                         </TooltipProvider>
                       </TableCell>
                     </TableRow>
@@ -481,6 +527,22 @@ function PaymentsPage() {
       </Card>
 
       <PaymentFormDialog open={open} onOpenChange={setOpen} />
+      <AlertDialog open={!!toDelete} onOpenChange={(value) => !value && setToDelete(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Supprimer ce paiement ?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Cette action est irréversible. Le paiement sélectionné sera supprimé.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Annuler</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void onDeletePayment()}>
+              Supprimer
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </AppLayout>
   );
 }

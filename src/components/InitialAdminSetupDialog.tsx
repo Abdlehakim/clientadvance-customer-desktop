@@ -121,7 +121,7 @@ export function InitialAdminSetupDialog({
   const [email, setEmail] = useState("");
   const [whatsApp, setWhatsApp] = useState("");
   const [notificationRetentionDays, setNotificationRetentionDays] = useState("30");
-  const [smtpProviderType, setSmtpProviderType] = useState<SmtpProviderType>("custom");
+  const [smtpProviderType, setSmtpProviderType] = useState<SmtpProviderType>("gmail");
   const [smtpHost, setSmtpHost] = useState("");
   const [smtpPort, setSmtpPort] = useState(GMAIL_SMTP_PORT);
   const [smtpUsername, setSmtpUsername] = useState("");

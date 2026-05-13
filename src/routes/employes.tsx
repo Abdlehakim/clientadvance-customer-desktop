@@ -20,10 +20,13 @@ import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   createEmployeeAccount,
+  EMPLOYEE_LIMIT_REACHED_MESSAGE,
   formatDateFR,
   getAdminSettings,
   getCurrentUser,
+  getEmployeeCount,
   getEmployeeAccounts,
+  hasReachedEmployeeLimit,
   updateEmployeeAccount,
 } from "@/lib/data";
 import { useHasMounted } from "@/hooks/useHasMounted";
@@ -97,6 +100,9 @@ function EmployeeManagementPage() {
     );
   }
 
+  const employeeCount = getEmployeeCount(employees);
+  const employeeLimitReached = hasReachedEmployeeLimit(employees);
+
   const resetForm = () => {
     setName("");
     setEmail("");
@@ -105,6 +111,11 @@ function EmployeeManagementPage() {
 
   const onCreate = async (event: FormEvent) => {
     event.preventDefault();
+
+    if (employeeLimitReached) {
+      toast.error(EMPLOYEE_LIMIT_REACHED_MESSAGE);
+      return;
+    }
 
     setSubmitting(true);
 
@@ -195,7 +206,7 @@ function EmployeeManagementPage() {
                 id="employee-name"
                 value={name}
                 onChange={(event) => setName(event.target.value)}
-                disabled={submitting}
+                disabled={submitting || employeeLimitReached}
                 required
               />
             </div>
@@ -207,7 +218,7 @@ function EmployeeManagementPage() {
                 type="email"
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
-                disabled={submitting}
+                disabled={submitting || employeeLimitReached}
                 required
               />
             </div>
@@ -219,7 +230,7 @@ function EmployeeManagementPage() {
                 type="password"
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
-                disabled={submitting}
+                disabled={submitting || employeeLimitReached}
                 minLength={6}
                 required
               />
@@ -230,8 +241,12 @@ function EmployeeManagementPage() {
               <Input id="employee-role" value="employe" disabled readOnly />
             </div>
 
+            {employeeLimitReached ? (
+              <p className="text-sm text-destructive">{EMPLOYEE_LIMIT_REACHED_MESSAGE}</p>
+            ) : null}
+
             <div className="flex gap-2 pt-2">
-              <Button type="submit" disabled={submitting}>
+              <Button type="submit" disabled={submitting || employeeLimitReached}>
                 Enregistrer
               </Button>
               <Button type="button" variant="outline" onClick={resetForm} disabled={submitting}>
@@ -254,7 +269,7 @@ function EmployeeManagementPage() {
                 <p className="mt-1 text-sm text-muted-foreground">{listStatusNote}</p>
               ) : null}
             </div>
-            <Badge variant="outline">{employees.length} compte(s)</Badge>
+            <Badge variant="outline">{employeeCount} compte(s)</Badge>
           </div>
 
           <div className="overflow-x-auto rounded-md border">

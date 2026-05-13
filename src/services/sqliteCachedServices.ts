@@ -936,6 +936,12 @@ export const sqliteCachedPaymentService: PaymentRepository = {
     emitCacheChange();
     return payment as Payment;
   },
+  async delete(id) {
+    await initializeSqliteCache();
+    await paymentSQLiteRepository.delete(id);
+    await Promise.all([refreshPayments(), refreshLogs(), refreshNotifications()]);
+    emitCacheChange();
+  },
 };
 
 export const sqliteCachedAdminSettingsService: AdminSettingsRepository = {

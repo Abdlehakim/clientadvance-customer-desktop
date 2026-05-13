@@ -11,7 +11,7 @@ type PaymentSyncDisplayStatus =
 
 const STATUS_MAP: Record<PaymentSyncDisplayStatus, { label: string; className: string }> = {
   "saved-local": {
-    label: "Enregistr\u00e9 localement",
+    label: "Eng.L",
     className: "bg-success/15 text-[oklch(0.35_0.1_150)] border-success/30",
   },
   "failed-local": {
@@ -31,7 +31,7 @@ const STATUS_MAP: Record<PaymentSyncDisplayStatus, { label: string; className: s
     className: "bg-destructive/15 text-destructive border-destructive/30",
   },
   "not-applicable": {
-    label: "Non applicable",
+    label: "N.A",
     className: "bg-muted text-muted-foreground border-border",
   },
 };

@@ -303,6 +303,17 @@ export const getPayments = () =>
 export const getPaymentsByClient = (id: string) =>
   getPayments().filter((payment) => payment.client_id === id);
 export const createPayment = (input: PaymentCreateInput) => paymentService.create(input);
+export async function deletePayment(id: string) {
+  if (!isAdmin(getCurrentUser())) {
+    throw new Error("AccÃ¨s refusÃ©. Cette action est rÃ©servÃ©e Ã  l'administrateur.");
+  }
+
+  if (!paymentService.delete) {
+    throw new Error("Suppression du paiement indisponible.");
+  }
+
+  await paymentService.delete(id);
+}
 export type LocalPaymentSyncDisplayStatus = "saved-local" | "failed-local";
 export type ServerPaymentSyncDisplayStatus =
   | "synced"
@@ -642,6 +653,24 @@ function usesServerModeForEmployees() {
   return !useLocalAuth || getServerMode() === "with-server";
 }
 
+export const MAX_EMPLOYEES = 2;
+export const EMPLOYEE_LIMIT_REACHED_MESSAGE =
+  "Limite atteinte : vous pouvez créer au maximum 2 employés.";
+
+export function getEmployeeCount(employees: Pick<EmployeeAccount, "role">[]) {
+  return employees.filter((employee) => employee.role === "employe").length;
+}
+
+export function hasReachedEmployeeLimit(employees: Pick<EmployeeAccount, "role">[]) {
+  return getEmployeeCount(employees) >= MAX_EMPLOYEES;
+}
+
+function assertCanCreateEmployee(employees: Pick<EmployeeAccount, "role">[]) {
+  if (hasReachedEmployeeLimit(employees)) {
+    throw new Error(EMPLOYEE_LIMIT_REACHED_MESSAGE);
+  }
+}
+
 export const getEmployeeAccounts = async (): Promise<EmployeeAccountListResult> => {
   if (!usesServerModeForEmployees()) {
     return {
@@ -684,6 +713,8 @@ export const createEmployeeAccount = async (
   input: EmployeeAccountCreateInput,
 ): Promise<EmployeeAccount> => {
   if (!usesServerModeForEmployees()) {
+    assertCanCreateEmployee(await listLocalEmployeeAccounts());
+
     return createLocalEmployeeAccount(input, {
       offline_enabled: true,
       sync_status: "local",
@@ -692,6 +723,8 @@ export const createEmployeeAccount = async (
   }
 
   try {
+    assertCanCreateEmployee(await userRemoteService.list());
+
     const employee = await userRemoteService.create(input);
 
     await upsertLocalEmployeeAccount(employee, {

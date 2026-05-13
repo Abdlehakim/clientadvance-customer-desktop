@@ -91,7 +91,7 @@ CREATE TABLE IF NOT EXISTS admin_settings (
   setup_completed INTEGER NOT NULL DEFAULT 0,
   server_mode TEXT NOT NULL DEFAULT 'with-server',
   notification_delivery_mode TEXT NOT NULL DEFAULT 'backend',
-  smtp_provider_type TEXT NOT NULL DEFAULT 'custom',
+  smtp_provider_type TEXT NOT NULL DEFAULT 'gmail',
   smtp_host TEXT NOT NULL DEFAULT '',
   smtp_port INTEGER NOT NULL DEFAULT 587,
   smtp_username TEXT NOT NULL DEFAULT '',
@@ -869,7 +869,7 @@ fn ensure_schema_upgrades(connection: &Connection) -> Result<(), String> {
     connection,
     "admin_settings",
     "smtp_provider_type",
-    "TEXT NOT NULL DEFAULT 'custom'",
+    "TEXT NOT NULL DEFAULT 'gmail'",
   )?;
   add_column_if_missing(
     connection,
@@ -1002,7 +1002,7 @@ fn ensure_schema_upgrades(connection: &Connection) -> Result<(), String> {
             1,
             'with-server',
             'backend',
-            'custom',
+            'gmail',
             '',
             587,
             '',

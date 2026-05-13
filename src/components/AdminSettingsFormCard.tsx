@@ -70,7 +70,7 @@ export function AdminSettingsFormCard({
   const [whatsApp, setWhatsApp] = useState("");
   const [notificationRetentionDays, setNotificationRetentionDays] = useState("30");
   const [serverMode, setServerMode] = useState<ServerMode>("with-server");
-  const [smtpProviderType, setSmtpProviderType] = useState<SmtpProviderType>("custom");
+  const [smtpProviderType, setSmtpProviderType] = useState<SmtpProviderType>("gmail");
   const [smtpHost, setSmtpHost] = useState("");
   const [smtpPort, setSmtpPort] = useState("587");
   const [smtpUsername, setSmtpUsername] = useState("");

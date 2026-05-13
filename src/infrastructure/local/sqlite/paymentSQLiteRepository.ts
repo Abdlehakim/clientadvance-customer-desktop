@@ -109,6 +109,31 @@ async function getClientTotalPaid(clientId: string) {
   return readNumber(rows[0]?.total_paid);
 }
 
+async function getExistingPayment(id: string) {
+  const db = await getDb();
+  const rows = await db.query<PaymentSqliteRow>(
+    `
+      SELECT
+        id,
+        client_id,
+        montant,
+        date_paiement,
+        heure_paiement,
+        created_by,
+        created_at,
+        remote_updated_at,
+        pending_sync,
+        sync_status
+      FROM payments
+      WHERE id = ?
+      LIMIT 1
+    `,
+    [id],
+  );
+
+  return rows[0] ? toPayment(rows[0]) : null;
+}
+
 async function queuePaymentNotifications(
   payment: Payment,
   client: PaymentClient | null,
@@ -243,5 +268,41 @@ export const paymentSQLiteRepository: PaymentRepository = {
     );
 
     return payment;
+  },
+  async delete(id: string) {
+    const payment = await getExistingPayment(id);
+
+    if (!payment) {
+      return;
+    }
+
+    const user = authLocalRepository.getCurrentUser();
+    const client = await getPaymentClient(payment.client_id);
+    const db = await getDb();
+
+    await db.execute(
+      `
+        DELETE FROM payments
+        WHERE id = ?
+      `,
+      [id],
+    );
+    await db.execute(
+      `
+        DELETE FROM notification_queue
+        WHERE payment_id = ?
+          AND (status IS NULL OR status IN (?, ?))
+      `,
+      [id, "queued", "sending"],
+    );
+
+    await activityLogSQLiteRepository.create({
+      user_id: user?.id ?? "",
+      user_name: user?.name ?? "-",
+      action_type: "payment_delete",
+      description: `Suppression du paiement de ${formatTND(payment.montant)} pour ${client?.nom_complet ?? "-"}`,
+      entity_type: "payment",
+      entity_id: id,
+    });
   },
 };

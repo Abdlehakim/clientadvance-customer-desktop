@@ -23,11 +23,11 @@ const STATUS_MAP: Record<
     className: "bg-destructive/15 text-destructive border-destructive/30",
   },
   "not-created": {
-    label: "Non cr\u00e9\u00e9",
+    label: "N.C",
     className: "bg-muted text-muted-foreground border-border",
   },
   "not-applicable": {
-    label: "Non applicable",
+    label: "N.A",
     className: "bg-muted text-muted-foreground border-border",
   },
 };

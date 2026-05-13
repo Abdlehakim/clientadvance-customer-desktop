@@ -4,4 +4,5 @@ export interface PaymentRepository {
   getAll(): Payment[] | Promise<Payment[]>;
   getByClientId(clientId: string): Payment[] | Promise<Payment[]>;
   create(input: PaymentCreateInput): Payment | Promise<Payment>;
+  delete?(id: string): void | Promise<void>;
 }
