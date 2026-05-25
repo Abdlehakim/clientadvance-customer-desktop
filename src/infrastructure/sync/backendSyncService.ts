@@ -19,6 +19,7 @@ import {
   isConnectionOnline,
   setConnectionTestOverride,
 } from "@/services/connectionService";
+import { filterActivityLogsByRetention } from "@/services/activityLogRetention";
 
 interface SyncPushPayload {
   clients: Array<{
@@ -197,7 +198,7 @@ function readSettings() {
 }
 
 function readLogs() {
-  return read<ActivityLog[]>(KEYS.logs, []);
+  return filterActivityLogsByRetention(read<ActivityLog[]>(KEYS.logs, []));
 }
 
 function readNotifications() {
@@ -217,7 +218,7 @@ function writeSnapshot(snapshot: {
   localStorage.setItem(KEYS.clients, JSON.stringify(snapshot.clients));
   localStorage.setItem(KEYS.payments, JSON.stringify(snapshot.payments));
   localStorage.setItem(KEYS.settings, JSON.stringify(snapshot.settings));
-  localStorage.setItem(KEYS.logs, JSON.stringify(snapshot.logs));
+  localStorage.setItem(KEYS.logs, JSON.stringify(filterActivityLogsByRetention(snapshot.logs)));
   localStorage.setItem(KEYS.notifications, JSON.stringify(snapshot.notifications));
 
   if (snapshot.lastSync) {

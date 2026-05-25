@@ -20,7 +20,10 @@ import type {
   SyncRepository,
   SyncResult,
 } from "@/domain/repositories";
-import { activityLogSQLiteRepository } from "@/infrastructure/local/sqlite/activityLogSQLiteRepository";
+import {
+  activityLogSQLiteRepository,
+  cleanupOldActivityLogs as cleanupSqliteActivityLogs,
+} from "@/infrastructure/local/sqlite/activityLogSQLiteRepository";
 import { adminSettingsSQLiteRepository } from "@/infrastructure/local/sqlite/adminSettingsSQLiteRepository";
 import { clientSQLiteRepository } from "@/infrastructure/local/sqlite/clientSQLiteRepository";
 import {
@@ -42,6 +45,7 @@ import {
   KEYS,
   SYNC_BRIDGE_KEYS,
 } from "@/infrastructure/local/localStorageDatabase";
+import { filterActivityLogsByRetention } from "@/services/activityLogRetention";
 
 function emptySettings(): AdminSettings {
   return createAdminSettingsFallback();
@@ -383,6 +387,8 @@ async function loadSettingsFromSqlite() {
 }
 
 async function loadLogsFromSqlite() {
+  await cleanupSqliteActivityLogs();
+
   const db = await getDb();
   const rows = await db.query<ActivityLogRow>(
     `
@@ -755,7 +761,7 @@ async function replaceSettings(settings: AdminSettings) {
 async function replaceLogs(logs: ActivityLog[]) {
   const db = await getDb();
 
-  for (const log of logs) {
+  for (const log of filterActivityLogsByRetention(logs)) {
     await db.execute(
       `
         INSERT INTO activity_logs (
@@ -958,7 +964,7 @@ export const sqliteCachedAdminSettingsService: AdminSettingsRepository = {
 
 export const sqliteCachedActivityLogService: ActivityLogRepository = {
   getAll() {
-    return cache.logs;
+    return filterActivityLogsByRetention(cache.logs);
   },
   async create(input) {
     await initializeSqliteCache();

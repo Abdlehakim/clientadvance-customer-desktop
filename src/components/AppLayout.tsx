@@ -54,7 +54,7 @@ const allItems = [
   { to: "/dashboard", label: "Tableau de bord", icon: LayoutDashboard, admin: false },
   { to: "/clients", label: "Clients", icon: Users, admin: false },
   { to: "/paiements", label: "Paiements", icon: CreditCard, admin: false },
-  { to: "/employes", label: "Gestion des employés", icon: UserCog, admin: true },
+  { to: "/employes", label: "Gestion des E-user", icon: UserCog, admin: true },
   { to: "/parametres", label: "Paramètres administrateur", icon: Settings, admin: true },
   { to: "/journal", label: "Journal des activités", icon: ScrollText, admin: true },
 ] as const;
@@ -97,6 +97,18 @@ function getUserSessionKey(user: UserSessionKeySource | null | undefined) {
   const role = user.role.trim();
 
   return id.length > 0 && role.length > 0 ? `${id}:${role}` : null;
+}
+
+function getUserRoleDisplayLabel(role: string | null | undefined) {
+  if (role === "employe") {
+    return "E-user";
+  }
+
+  if (role === "admin") {
+    return "Admin";
+  }
+
+  return role ?? "";
 }
 
 function readAppLayoutSessionCache(userSessionKey: string | null) {
@@ -733,7 +745,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
             G
           </div>
           <div>
-            <div className="text-sm font-semibold leading-tight">ClientAdvance</div>
+            <div className="text-sm font-semibold leading-tight">ClientAdvans</div>
             <div className="text-xs leading-tight opacity-70">& Paiements</div>
           </div>
         </div>
@@ -761,7 +773,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
         <div className="border-t border-sidebar-border p-3">
           <div className="mb-2 px-2 text-xs">
             <div className="font-medium">{user.name}</div>
-            <div className="capitalize opacity-60">{user.role}</div>
+            <div className="opacity-60">{getUserRoleDisplayLabel(user.role)}</div>
           </div>
           <Button
             variant="ghost"

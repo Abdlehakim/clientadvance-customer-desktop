@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Eye, EyeOff } from "lucide-react";
 import { TunisianPhoneInput } from "@/components/TunisianPhoneInput";
+import { APP_INPUT_WITH_RIGHT_ICON_CLASS_NAME } from "@/components/inputStyles";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
@@ -617,7 +618,7 @@ export function InitialAdminSetupDialog({
                     type={isSmtpPasswordVisible ? "text" : "password"}
                     value={smtpPassword}
                     onChange={(event) => setSmtpPassword(event.target.value)}
-                    className="pr-10"
+                    className={APP_INPUT_WITH_RIGHT_ICON_CLASS_NAME}
                   />
                   <Button
                     type="button"

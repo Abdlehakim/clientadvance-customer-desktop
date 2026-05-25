@@ -4,6 +4,7 @@ import { Eye, Pencil, Plus, Search, Trash2 } from "lucide-react";
 import { AppLayout } from "@/components/AppLayout";
 import { ClientFormDialog } from "@/components/ClientFormDialog";
 import { PaymentSyncStatusBadge } from "@/components/PaymentSyncStatusBadge";
+import { APP_INPUT_WITH_LEFT_ICON_CLASS_NAME } from "@/components/inputStyles";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -109,7 +110,7 @@ function ClientsPage() {
               placeholder="Rechercher un client..."
               value={q}
               onChange={(event) => setQ(event.target.value)}
-              className="pl-9"
+              className={APP_INPUT_WITH_LEFT_ICON_CLASS_NAME}
             />
           </div>
         </div>

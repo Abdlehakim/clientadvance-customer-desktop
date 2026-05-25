@@ -6,6 +6,7 @@ import { AppLayout } from "@/components/AppLayout";
 import { PaymentFormDialog } from "@/components/PaymentFormDialog";
 import { PaymentNotificationStatusBadge } from "@/components/PaymentNotificationStatusBadge";
 import { PaymentSyncStatusBadge } from "@/components/PaymentSyncStatusBadge";
+import { APP_INPUT_WITH_LEFT_ICON_CLASS_NAME } from "@/components/inputStyles";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -234,14 +235,14 @@ function buildReceiptHtml(receipt: PaymentReceiptData) {
     <main class="receipt">
       <header class="receipt-header">
         <h1 class="receipt-title">Re\u00e7u de paiement</h1>
-        <p class="receipt-subtitle">ClientAdvance</p>
+        <p class="receipt-subtitle">ClientAdvans</p>
       </header>
       <table class="receipt-table" aria-label="D\u00e9tails du paiement">
         <tbody>
           ${rows}
         </tbody>
       </table>
-      <footer class="receipt-footer">ClientAdvance</footer>
+      <footer class="receipt-footer">ClientAdvans</footer>
     </main>
   </body>
 </html>`;
@@ -419,7 +420,7 @@ function PaymentsPage() {
               placeholder="Filtrer par client..."
               value={q}
               onChange={(event) => setQ(event.target.value)}
-              className="pl-9"
+              className={APP_INPUT_WITH_LEFT_ICON_CLASS_NAME}
             />
           </div>
         </div>

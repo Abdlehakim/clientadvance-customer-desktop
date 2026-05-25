@@ -166,7 +166,11 @@ function LicenseInfoRow({
   );
 }
 
-export function LicenseInfoCard() {
+interface LicenseInfoCardProps {
+  actionButtonClassName?: string;
+}
+
+export function LicenseInfoCard({ actionButtonClassName }: LicenseInfoCardProps = {}) {
   const [licenseInfo, setLicenseInfo] = useState<LicenseInfoState>(
     createInitialLicenseInfoState(),
   );
@@ -384,6 +388,7 @@ export function LicenseInfoCard() {
             <Button
               type="button"
               variant="outline"
+              className={actionButtonClassName}
               onClick={() => void onRefreshLicense()}
               disabled={isRefreshing || isClearing}
             >
@@ -392,6 +397,7 @@ export function LicenseInfoCard() {
             <Button
               type="button"
               variant="outline"
+              className={actionButtonClassName}
               onClick={() => void onDeactivateLicense()}
               disabled={!canDeactivate || isRefreshing || isClearing}
             >

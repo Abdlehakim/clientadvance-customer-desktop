@@ -46,8 +46,17 @@ import { toast } from "sonner";
 
 export const Route = createFileRoute("/employes")({ component: EmployeeManagementPage });
 
+function replaceEmployeeDisplayText(value: string) {
+  return value.replace(/\b(employés|employé|employes|employe|employees|employee)\b/gi, "E-user");
+}
+
 function getErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : "Opération impossible.";
+  const message = error instanceof Error ? error.message : "Opération impossible.";
+  return replaceEmployeeDisplayText(message);
+}
+
+function getRoleDisplayLabel(role: EmployeeAccount["role"]) {
+  return role === "employe" ? "E-user" : role;
 }
 
 function EmployeeManagementPage() {
@@ -161,8 +170,8 @@ function EmployeeManagementPage() {
       resetForm();
       toast.success(
         serverMode === "without-server"
-          ? "Compte employé créé localement avec succès"
-          : "Compte employé créé avec succès",
+          ? "Compte E-user créé localement avec succès"
+          : "Compte E-user créé avec succès",
       );
       await refreshEmployees();
     } catch (error) {
@@ -179,7 +188,7 @@ function EmployeeManagementPage() {
       await updateEmployeeAccount(employee.id, {
         is_active: !employee.is_active,
       });
-      toast.success(employee.is_active ? "Compte employé désactivé." : "Compte employé activé.");
+      toast.success(employee.is_active ? "Compte E-user désactivé." : "Compte E-user activé.");
       await refreshEmployees();
     } catch (error) {
       toast.error(getErrorMessage(error));
@@ -199,7 +208,7 @@ function EmployeeManagementPage() {
       await updateEmployeeAccount(passwordTarget.id, {
         password: nextPassword,
       });
-      toast.success("Mot de passe employé mis à jour.");
+      toast.success("Mot de passe E-user mis à jour.");
       setPasswordTarget(null);
       setNextPassword("");
       await refreshEmployees();
@@ -216,7 +225,7 @@ function EmployeeManagementPage() {
     }
 
     if (employeeToDelete.id === user?.id) {
-      toast.error("Impossible de supprimer l’employé.");
+      toast.error("Impossible de supprimer l’E-user.");
       setEmployeeToDelete(null);
       return;
     }
@@ -225,11 +234,11 @@ function EmployeeManagementPage() {
 
     try {
       await deleteEmployeeAccount(employeeToDelete.id);
-      toast.success("Employé supprimé.");
+      toast.success("E-user supprimé.");
       setEmployeeToDelete(null);
       await refreshEmployees();
     } catch {
-      toast.error("Impossible de supprimer l’employé.");
+      toast.error("Impossible de supprimer l’E-user.");
       setEmployeeToDelete(null);
     } finally {
       setBusyUserId(null);
@@ -240,16 +249,16 @@ function EmployeeManagementPage() {
     <AppLayout>
       <div className="mb-6 flex items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Gestion des employés</h1>
+          <h1 className="text-2xl font-bold tracking-tight">Gestion des E-user</h1>
           <p className="text-sm text-muted-foreground">
-            Création et gestion des comptes employés par l’administrateur
+            Création et gestion des comptes E-user par l’administrateur
           </p>
           {employeeLimitReached ? (
             <p className="mt-1 text-sm text-destructive">{EMPLOYEE_LIMIT_REACHED_MESSAGE}</p>
           ) : null}
         </div>
         <Button onClick={onAddEmployee} disabled={employeeLimitReached}>
-          <UserPlus className="mr-2 h-4 w-4" /> Ajouter un employé
+          <UserPlus className="mr-2 h-4 w-4" /> Ajouter un E-user
         </Button>
       </div>
 
@@ -257,7 +266,7 @@ function EmployeeManagementPage() {
         <Card className="p-4 shadow-card">
           <div className="mb-4 flex items-center justify-between gap-3">
             <div>
-              <h2 className="font-semibold">Liste des employés</h2>
+              <h2 className="font-semibold">Liste des E-user</h2>
               <p className="text-sm text-muted-foreground">
                 {serverMode === "with-server"
                   ? "La liste du serveur est utilisée en priorité et recopiée localement."
@@ -292,7 +301,7 @@ function EmployeeManagementPage() {
                 ) : employees.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
-                      Aucun compte employé.
+                      Aucun compte E-user.
                     </TableCell>
                   </TableRow>
                 ) : (
@@ -300,7 +309,7 @@ function EmployeeManagementPage() {
                     <TableRow key={employee.id}>
                       <TableCell className="font-medium">{employee.name}</TableCell>
                       <TableCell>{employee.email}</TableCell>
-                      <TableCell>{employee.role}</TableCell>
+                      <TableCell>{getRoleDisplayLabel(employee.role)}</TableCell>
                       <TableCell>
                         <Badge
                           variant="outline"
@@ -366,7 +375,7 @@ function EmployeeManagementPage() {
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Supprimer cet employé ?</AlertDialogTitle>
+            <AlertDialogTitle>Supprimer cet E-user ?</AlertDialogTitle>
             <AlertDialogDescription>
               {"Cette action est irréversible. Le compte « "}
               {employeeToDelete?.name}
@@ -391,7 +400,7 @@ function EmployeeManagementPage() {
       <Dialog open={createDialogOpen} onOpenChange={onCreateDialogOpenChange}>
         <DialogContent className="sm:max-w-[480px]">
           <DialogHeader>
-            <DialogTitle>Ajouter un employé</DialogTitle>
+            <DialogTitle>Ajouter un E-user</DialogTitle>
           </DialogHeader>
 
           <form className="space-y-4 py-2" onSubmit={onCreate}>
@@ -433,7 +442,7 @@ function EmployeeManagementPage() {
 
             <div className="space-y-1.5">
               <Label htmlFor="employee-role">Rôle</Label>
-              <Input id="employee-role" value="employe" disabled readOnly />
+              <Input id="employee-role" value="E-user" disabled readOnly />
             </div>
 
             <DialogFooter>
@@ -466,7 +475,7 @@ function EmployeeManagementPage() {
           <DialogHeader>
             <DialogTitle>Changer le mot de passe</DialogTitle>
             <DialogDescription>
-              Définissez un nouveau mot de passe pour {passwordTarget?.name ?? "cet employé"}.
+              Définissez un nouveau mot de passe pour {passwordTarget?.name ?? "cet E-user"}.
             </DialogDescription>
           </DialogHeader>
 

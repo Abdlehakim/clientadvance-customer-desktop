@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { AppLayout } from "@/components/AppLayout";
 import { Card } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
+import { DatePickerInput } from "@/components/DatePickerInput";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { getActivityLogs, getCurrentUser, formatDateTimeFR } from "@/lib/data";
@@ -21,10 +21,19 @@ const actionLabels: Record<string, string> = {
   payment_create: "Création paiement",
   settings_update: "Paramètres",
   sync: "Synchronisation",
-  employee_create: "Création employé",
-  employee_status_update: "Statut employé",
-  employee_password_reset: "Mot de passe employé",
+  employee_create: "Création E-user",
+  employee_status_update: "Statut E-user",
+  employee_password_reset: "Mot de passe E-user",
+  employee_delete: "Suppression E-user",
 };
+
+function replaceEmployeeDisplayText(value: string) {
+  return value.replace(/\b(employés|employé|employes|employe|employees|employee)\b/gi, "E-user");
+}
+
+function getActionDisplayLabel(actionType: string) {
+  return actionLabels[actionType] ?? replaceEmployeeDisplayText(actionType);
+}
 
 function JournalPage() {
   useAppData();
@@ -80,10 +89,10 @@ function JournalPage() {
             <SelectTrigger><SelectValue placeholder="Action" /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">Toutes les actions</SelectItem>
-              {actions.map((x) => <SelectItem key={x} value={x}>{actionLabels[x] ?? x}</SelectItem>)}
+              {actions.map((x) => <SelectItem key={x} value={x}>{getActionDisplayLabel(x)}</SelectItem>)}
             </SelectContent>
           </Select>
-          <Input type="date" value={d} onChange={(e) => setD(e.target.value)} />
+          <DatePickerInput value={d} onChange={setD} />
         </div>
         <div className="overflow-x-auto rounded-md border">
           <Table>
@@ -107,9 +116,9 @@ function JournalPage() {
                     <TableCell>{dt.date}</TableCell>
                     <TableCell>{dt.time}</TableCell>
                     <TableCell>{l.user_name}</TableCell>
-                    <TableCell><Badge variant="outline">{actionLabels[l.action_type] ?? l.action_type}</Badge></TableCell>
-                    <TableCell className="text-muted-foreground">{l.entity_type}</TableCell>
-                    <TableCell>{l.description}</TableCell>
+                    <TableCell><Badge variant="outline">{getActionDisplayLabel(l.action_type)}</Badge></TableCell>
+                    <TableCell className="text-muted-foreground">{replaceEmployeeDisplayText(l.entity_type)}</TableCell>
+                    <TableCell>{replaceEmployeeDisplayText(l.description)}</TableCell>
                   </TableRow>
                 );
               })}

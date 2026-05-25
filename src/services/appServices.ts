@@ -20,7 +20,10 @@ import { authLocalRepository } from "@/infrastructure/local/authLocalRepository"
 import { clientLocalRepository } from "@/infrastructure/local/clientLocalRepository";
 import { paymentLocalRepository } from "@/infrastructure/local/paymentLocalRepository";
 import { adminSettingsLocalRepository } from "@/infrastructure/local/adminSettingsLocalRepository";
-import { activityLogLocalRepository } from "@/infrastructure/local/activityLogLocalRepository";
+import {
+  activityLogLocalRepository,
+  cleanupOldActivityLogs as cleanupLocalActivityLogs,
+} from "@/infrastructure/local/activityLogLocalRepository";
 import { notificationLocalRepository } from "@/infrastructure/local/notificationLocalRepository";
 import {
   BACKEND_SYNC_DISABLED_MESSAGE,
@@ -108,6 +111,7 @@ export async function initializeStorageDriver() {
 
     if (!useSQLiteStorage) {
       seedLocalStorageIfNeeded();
+      cleanupLocalActivityLogs();
     }
 
     if (useSQLiteStorage) {
@@ -149,10 +153,10 @@ import type {
 } from "@/domain/types";
 import type { SyncRepository } from "@/domain/repositories";
 
-const SMTP_TEST_SUBJECT = "Test SMTP - ClientAdvance";
+const SMTP_TEST_SUBJECT = "Test SMTP - ClientAdvans";
 const SMTP_TEST_BODY = `Bonjour,
 
-Ceci est un email de test envoyé depuis ClientAdvance.
+Ceci est un email de test envoyé depuis ClientAdvans.
 
 Si vous recevez ce message, la configuration SMTP fonctionne correctement.`;
 const MISSING_SMTP_TEST_MESSAGE =
@@ -656,7 +660,7 @@ function usesServerModeForEmployees() {
 
 export const MAX_EMPLOYEES = 2;
 export const EMPLOYEE_LIMIT_REACHED_MESSAGE =
-  "Limite atteinte : vous pouvez créer au maximum 2 employés.";
+  "Limite atteinte : vous pouvez créer au maximum 2 E-user.";
 
 export function getEmployeeCount(employees: Pick<EmployeeAccount, "role">[]) {
   return employees.filter((employee) => employee.role === "employe").length;
@@ -738,7 +742,7 @@ export const createEmployeeAccount = async (
     return employee;
   } catch (error) {
     if (error instanceof ApiError && error.status === 0) {
-      throw new Error("Impossible de créer l’employé sur le serveur.");
+      throw new Error("Impossible de créer l’E-user sur le serveur.");
     }
 
     throw error;
@@ -769,7 +773,7 @@ export const updateEmployeeAccount = async (
     return employee;
   } catch (error) {
     if (error instanceof ApiError && error.status === 0) {
-      throw new Error("Impossible de mettre à jour l’employé sur le serveur.");
+      throw new Error("Impossible de mettre à jour l’E-user sur le serveur.");
     }
 
     throw error;
@@ -803,7 +807,7 @@ export const deleteEmployeeAccount = async (id: string): Promise<void> => {
     }
   } catch (error) {
     if (error instanceof ApiError && error.status === 0) {
-      throw new Error("Impossible de supprimer lâ€™employÃ© sur le serveur.");
+      throw new Error("Impossible de supprimer l’E-user sur le serveur.");
     }
 
     throw error;

@@ -5,6 +5,7 @@ import { AppLayout } from "@/components/AppLayout";
 import { DatabaseLocationCard } from "@/components/DatabaseLocationCard";
 import { LicenseInfoCard } from "@/components/LicenseInfoCard";
 import { Card } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useHasMounted } from "@/hooks/useHasMounted";
 import {
   BACKEND_SYNC_DISABLED_MESSAGE,
@@ -14,6 +15,8 @@ import { getAdminSettings, getCurrentUser } from "@/lib/data";
 import { useAppData } from "@/lib/useAppData";
 
 export const Route = createFileRoute("/parametres")({ component: SettingsPage });
+
+const SETTINGS_ACTION_BUTTON_CLASS = "w-[260px] max-w-full cursor-pointer disabled:cursor-not-allowed";
 
 function SettingsPage() {
   useAppData();
@@ -55,16 +58,41 @@ function SettingsPage() {
         </p>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
-        <AdminSettingsFormCard
-          settings={settings}
-          showSmtpTestButton
-          showSmtpPasswordToggle
-        />
+      <Tabs defaultValue="notifications" className="space-y-4">
+        <div className="overflow-x-auto pb-1">
+          <TabsList className="h-auto min-w-max justify-start">
+            <TabsTrigger value="notifications">Envoi des notifications</TabsTrigger>
+            <TabsTrigger value="smtp">Paramètres email SMTP</TabsTrigger>
+            <TabsTrigger value="license">Licence de l’application</TabsTrigger>
+            <TabsTrigger value="pending">Notifications en attente</TabsTrigger>
+            <TabsTrigger value="database">Base de données locale</TabsTrigger>
+          </TabsList>
+        </div>
 
-        <div className="space-y-4">
-          <LicenseInfoCard />
+        <TabsContent value="notifications" className="mt-0">
+          <AdminSettingsFormCard
+            settings={settings}
+            actionButtonClassName={SETTINGS_ACTION_BUTTON_CLASS}
+            sections={["notifications"]}
+          />
+        </TabsContent>
 
+        <TabsContent value="smtp" className="mt-0">
+          <AdminSettingsFormCard
+            settings={settings}
+            actionButtonClassName={SETTINGS_ACTION_BUTTON_CLASS}
+            title="Paramètres email SMTP"
+            sections={["smtp"]}
+            showSmtpTestButton
+            showSmtpPasswordToggle
+          />
+        </TabsContent>
+
+        <TabsContent value="license" className="mt-0">
+          <LicenseInfoCard actionButtonClassName={SETTINGS_ACTION_BUTTON_CLASS} />
+        </TabsContent>
+
+        <TabsContent value="pending" className="mt-0">
           <Card className="p-6 shadow-card">
             <h3 className="font-semibold">Notifications en attente</h3>
             {isWithoutServerMode ? (
@@ -87,10 +115,14 @@ function SettingsPage() {
               </>
             )}
           </Card>
+        </TabsContent>
 
-          <DatabaseLocationCard />
-        </div>
-      </div>
+        <TabsContent value="database" className="mt-0">
+          <DatabaseLocationCard
+            actionButtonClassName={SETTINGS_ACTION_BUTTON_CLASS}
+          />
+        </TabsContent>
+      </Tabs>
     </AppLayout>
   );
 }

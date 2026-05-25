@@ -64,7 +64,7 @@ function LoginPage() {
           <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-primary text-primary-foreground">
             <LockKeyhole className="h-6 w-6" />
           </div>
-          <h1 className="text-2xl font-bold tracking-tight">ClientAdvance</h1>
+          <h1 className="text-2xl font-bold tracking-tight">ClientAdvans</h1>
           <p className="mt-1 text-sm text-muted-foreground">Connectez-vous a votre espace</p>
         </div>
 

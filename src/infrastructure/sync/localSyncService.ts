@@ -6,6 +6,7 @@ import {
   isConnectionOnline,
   setConnectionTestOverride,
 } from "@/services/connectionService";
+import { filterActivityLogsByRetention } from "@/services/activityLogRetention";
 
 const isPendingSync = (item: { pending_sync?: boolean; sync_status?: string }) =>
   item.pending_sync === true || item.sync_status === "pending" || item.sync_status === "failed";
@@ -22,7 +23,7 @@ function getPendingBreakdown() {
   )
     ? 1
     : 0;
-  const activityLogs = read<ActivityLog[]>(KEYS.logs, []).filter(
+  const activityLogs = filterActivityLogsByRetention(read<ActivityLog[]>(KEYS.logs, [])).filter(
     (log) => log.pending_sync !== false,
   ).length;
   const notifications = read<NotificationItem[]>(KEYS.notifications, []).filter(
@@ -72,7 +73,7 @@ export const localSyncService: SyncRepository = {
       : settings;
     if (isPendingSync(settings)) count++;
 
-    const logs = read<ActivityLog[]>(KEYS.logs, []).map((log) =>
+    const logs = filterActivityLogsByRetention(read<ActivityLog[]>(KEYS.logs, [])).map((log) =>
       log.pending_sync !== false ? (count++, { ...log, pending_sync: false, sync_status: "synced" as const }) : log,
     );
     const notifications = read<NotificationItem[]>(KEYS.notifications, []).map((notification) =>

@@ -1,4 +1,8 @@
 import type * as React from "react";
+import {
+  APP_INPUT_PHONE_NUMBER_CLASS_NAME,
+  APP_PHONE_PREFIX_CLASS_NAME,
+} from "@/components/inputStyles";
 import { Input } from "@/components/ui/input";
 import { TUNISIA_COUNTRY_CODE, formatTunisianLocalPhone } from "@/lib/tunisianPhone";
 import { cn } from "@/lib/utils";
@@ -7,18 +11,25 @@ interface TunisianPhoneInputProps
   extends Omit<React.ComponentProps<typeof Input>, "type" | "value" | "onChange"> {
   value: string;
   onChange: (value: string) => void;
+  prefixClassName?: string;
 }
 
 export function TunisianPhoneInput({
   className,
   onChange,
   placeholder = "55 555 555",
+  prefixClassName,
   value,
   ...props
 }: TunisianPhoneInputProps) {
   return (
     <div className="flex">
-      <div className="flex h-9 shrink-0 items-center rounded-l-md border border-r-0 border-input bg-muted px-3 text-sm text-muted-foreground">
+      <div
+        className={cn(
+          APP_PHONE_PREFIX_CLASS_NAME,
+          prefixClassName,
+        )}
+      >
         {TUNISIA_COUNTRY_CODE}
       </div>
       <Input
@@ -29,7 +40,7 @@ export function TunisianPhoneInput({
         inputMode="numeric"
         autoComplete="tel-national"
         maxLength={10}
-        className={cn("rounded-l-none", className)}
+        className={cn(className, APP_INPUT_PHONE_NUMBER_CLASS_NAME)}
         onChange={(event) => onChange(formatTunisianLocalPhone(event.target.value))}
       />
     </div>

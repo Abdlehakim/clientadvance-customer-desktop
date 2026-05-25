@@ -1064,19 +1064,11 @@ fn open_database(app: &AppHandle) -> Result<(Connection, PathBuf), String> {
 
 #[cfg(target_os = "windows")]
 fn open_path_in_file_explorer(path: &Path) -> Result<(), String> {
-  let status = Command::new("explorer")
+  Command::new("explorer")
     .arg(path)
-    .status()
-    .map_err(|error| error.to_string())?;
-
-  if status.success() {
-    Ok(())
-  } else {
-    Err(format!(
-      "Failed to open database directory (exit code {:?}).",
-      status.code()
-    ))
-  }
+    .spawn()
+    .map(|_| ())
+    .map_err(|error| error.to_string())
 }
 
 #[cfg(target_os = "macos")]
@@ -1476,7 +1468,7 @@ fn send_smtp_email(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-  let mut builder = tauri::Builder::default();
+  let builder = tauri::Builder::default();
 
   #[cfg(debug_assertions)]
   {

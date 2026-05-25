@@ -49,7 +49,7 @@ const html = [
   "  <head>",
   '    <meta charset="utf-8">',
   '    <meta name="viewport" content="width=device-width, initial-scale=1">',
-  "    <title>ClientAdvance</title>",
+  "    <title>ClientAdvans</title>",
   '    <meta name="description" content="Application de gestion des clients et paiements avec synchronisation hors ligne.">',
   '    <meta name="author" content="Lovable">',
   '    <meta property="og:title" content="Lovable App">',

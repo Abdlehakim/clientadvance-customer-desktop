@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "ClientAdvance",
+  "productName": "ClientAdvans",
   "version": "0.1.0",
   "identifier": "com.gestionfacile.desktop",
   "build": {
@@ -13,7 +13,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "ClientAdvance",
+        "title": "ClientAdvans",
         "width": 1280,
         "height": 800,
         "resizable": true

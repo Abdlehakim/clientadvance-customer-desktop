@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Button } from "@/components/ui/button";
+import { Button, type ButtonProps } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -18,12 +18,16 @@ import { toast } from "sonner";
 
 interface DatabaseLocationCardProps {
   className?: string;
+  actionButtonClassName?: string;
+  actionButtonVariant?: ButtonProps["variant"];
   description?: string;
   onLocationChange?: (location: SqliteDatabaseInfo | null) => void;
 }
 
 export function DatabaseLocationCard({
   className,
+  actionButtonClassName,
+  actionButtonVariant,
   description = "Ouvrir l'emplacement du fichier de base de données SQLite utilisé par l'application.",
   onLocationChange,
 }: DatabaseLocationCardProps) {
@@ -127,20 +131,22 @@ export function DatabaseLocationCard({
           <Input value={databaseLocation?.path ?? ""} readOnly />
         </div>
       ) : null}
-      <div className="mt-4 flex flex-col gap-2">
+      <div className="mt-4 flex flex-wrap gap-2">
         <Button
+          variant={actionButtonVariant}
+          className={actionButtonClassName}
           disabled={!isDesktopApp || isOpeningDatabaseLocation || isChangingDatabaseLocation}
           onClick={() => void handleOpenDatabaseLocation()}
         >
-          {isOpeningDatabaseLocation ? "Ouverture..." : "Ouvrir le dossier de la base de données"}
+          {isOpeningDatabaseLocation ? "Ouverture..." : "Ouvrir le dossier"}
         </Button>
         <Button
+          variant={actionButtonVariant}
+          className={actionButtonClassName}
           disabled={!isDesktopApp || isOpeningDatabaseLocation || isChangingDatabaseLocation}
           onClick={() => void handleChangeDatabaseLocation()}
         >
-          {isChangingDatabaseLocation
-            ? "Modification..."
-            : "Changer l'emplacement de la base de données"}
+          {isChangingDatabaseLocation ? "Modification..." : "Modifier l’emplacement"}
         </Button>
       </div>
       {!isDesktopApp ? (

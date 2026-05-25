@@ -8,6 +8,7 @@ import type {
   SmtpProviderType,
 } from "@/domain/types";
 import { SyncBadge } from "@/components/SyncBadge";
+import { APP_INPUT_WITH_RIGHT_ICON_CLASS_NAME } from "@/components/inputStyles";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -41,10 +42,14 @@ const GMAIL_SMTP_PORT = "587";
 const MISSING_SMTP_TEST_MESSAGE =
   "Paramètres SMTP manquants. Veuillez les configurer avant de tester l'envoi.";
 
+type AdminSettingsFormSection = "notifications" | "smtp";
+
 interface AdminSettingsFormCardProps {
   settings: AdminSettings;
   className?: string;
+  actionButtonClassName?: string;
   title?: string;
+  sections?: AdminSettingsFormSection[];
   submitLabel?: string;
   successMessage?: string;
   showSyncBadge?: boolean;
@@ -57,7 +62,9 @@ interface AdminSettingsFormCardProps {
 export function AdminSettingsFormCard({
   settings,
   className,
+  actionButtonClassName,
   title = "Envoi des notifications",
+  sections = ["notifications", "smtp"],
   submitLabel = "Enregistrer les paramètres",
   successMessage = "Paramètres administrateur enregistrés",
   showSyncBadge = true,
@@ -82,6 +89,8 @@ export function AdminSettingsFormCard({
   const [isSaving, setIsSaving] = useState(false);
   const [isTestingEmail, setIsTestingEmail] = useState(false);
   const [isSmtpPasswordVisible, setIsSmtpPasswordVisible] = useState(false);
+  const showNotificationSettings = sections.includes("notifications");
+  const showSmtpSettings = sections.includes("smtp");
 
   useEffect(() => {
     let cancelled = false;
@@ -362,212 +371,220 @@ export function AdminSettingsFormCard({
       </div>
 
       <div className="space-y-6">
-        <div className="space-y-4">
-          <div className="space-y-1.5">
-            <Label>Email de réception des notifications</Label>
-            <Input
-              type="email"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>Numéro WhatsApp de réception</Label>
-            <TunisianPhoneInput value={whatsApp} onChange={setWhatsApp} />
-            <p className="text-xs text-muted-foreground">
-              {WHATSAPP_BACKEND_REQUIRED_MESSAGE}
-            </p>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>Conservation des notifications envoyées (jours)</Label>
-            <Input
-              type="number"
-              min={1}
-              value={notificationRetentionDays}
-              onChange={(event) => setNotificationRetentionDays(event.target.value)}
-            />
-          </div>
-
-          <div className="rounded-md border bg-muted/30 p-3">
-            <div className="text-sm font-medium">Mode défini par le propriétaire</div>
-            <div className="mt-3 grid gap-3 md:grid-cols-2">
-              <div>
-                <div className="text-xs text-muted-foreground">Mode de fonctionnement</div>
-                <div className="mt-1 text-sm font-medium">
-                  {serverMode === "with-server" ? "Avec serveur" : "Sans serveur"}
-                </div>
-              </div>
-              <div>
-                <div className="text-xs text-muted-foreground">Mode d'envoi</div>
-                <div className="mt-1 text-sm font-medium">
-                  {deliveryMode === "backend"
-                    ? "Serveur backend"
-                    : "Email direct depuis l'application"}
-                </div>
-              </div>
-            </div>
-            <p className="mt-3 text-sm text-muted-foreground">{modeDescription}</p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Ce mode est géré par le propriétaire de l'application.
-            </p>
-          </div>
-        </div>
-
-        <div className="space-y-4 rounded-lg border bg-muted/30 p-4">
-          <div>
-            <h4 className="font-medium">Paramètres email SMTP</h4>
-            <p className="mt-1 text-sm text-muted-foreground">
-              {isWithoutServerMode
-                ? "Le mode sans serveur utilise l'envoi email direct depuis l'application."
-                : "En mode avec serveur, ces paramètres restent disponibles si vous activez plus tard l'envoi direct."}
-            </p>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>Type de compte email</Label>
-            <Select
-              value={smtpProviderType}
-              onValueChange={(value) => onSmtpProviderTypeChange(value as SmtpProviderType)}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Type de compte email" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="gmail">Gmail</SelectItem>
-                <SelectItem value="professional">
-                  Email professionnel / domaine personnalisé
-                </SelectItem>
-                <SelectItem value="custom">Configuration personnalisée</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          {isGmailProvider ? (
-            <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-950">
-              Pour Gmail, utilisez un mot de passe d'application, pas le mot de passe
-              normal du compte Gmail.
-            </div>
-          ) : null}
-
-          {isProfessionalProvider ? (
-            <div className="space-y-1 rounded-md border bg-background px-3 py-3 text-sm text-muted-foreground">
-              <p>
-                Utilisez les paramètres SMTP fournis par votre hébergeur email, par
-                exemple Hostinger, OVH, cPanel, Zoho, Outlook professionnel, etc.
-              </p>
-              <p>
-                Exemples : <code>smtp.yourdomain.com</code>,{" "}
-                <code>mail.yourdomain.com</code>, Port 587 TLS, Port 465 SSL.
-              </p>
-            </div>
-          ) : null}
-
-          <div className="grid gap-4 md:grid-cols-2">
+        {showNotificationSettings ? (
+          <div className="space-y-4">
             <div className="space-y-1.5">
-              <Label>Hôte SMTP</Label>
-              <Input
-                value={smtpHost}
-                onChange={(event) => setSmtpHost(event.target.value)}
-                placeholder="smtp.exemple.com"
-                readOnly={isGmailProvider}
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <Label>Port SMTP</Label>
-              <Input
-                type="number"
-                value={smtpPort}
-                onChange={(event) => setSmtpPort(event.target.value)}
-                min={1}
-                readOnly={isGmailProvider}
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <Label>Nom d'utilisateur SMTP</Label>
-              <Input
-                value={smtpUsername}
-                onChange={(event) => onSmtpUsernameChange(event.target.value)}
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <Label>Mot de passe SMTP</Label>
-              <div className="relative">
-                <Input
-                  type={isSmtpPasswordVisible ? "text" : "password"}
-                  value={smtpPassword}
-                  onChange={(event) => setSmtpPassword(event.target.value)}
-                  className={showSmtpPasswordToggle ? "pr-10" : undefined}
-                />
-                {showSmtpPasswordToggle ? (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="absolute right-1 top-1/2 h-7 w-7 -translate-y-1/2 text-muted-foreground"
-                    aria-label={
-                      isSmtpPasswordVisible
-                        ? "Masquer le mot de passe SMTP"
-                        : "Afficher le mot de passe SMTP"
-                    }
-                    onClick={toggleSmtpPasswordVisibility}
-                  >
-                    {isSmtpPasswordVisible ? (
-                      <EyeOff className="h-4 w-4" />
-                    ) : (
-                      <Eye className="h-4 w-4" />
-                    )}
-                  </Button>
-                ) : null}
-              </div>
-            </div>
-
-            <div className="space-y-1.5">
-              <Label>Email expéditeur</Label>
+              <Label>Email de réception des notifications</Label>
               <Input
                 type="email"
-                value={smtpFromEmail}
-                onChange={(event) => setSmtpFromEmail(event.target.value)}
-                readOnly={isGmailProvider}
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
               />
             </div>
 
             <div className="space-y-1.5">
-              <Label>Nom expéditeur</Label>
+              <Label>Numéro WhatsApp de réception</Label>
+              <TunisianPhoneInput
+                value={whatsApp}
+                onChange={setWhatsApp}
+              />
+              <p className="text-xs text-muted-foreground">
+                {WHATSAPP_BACKEND_REQUIRED_MESSAGE}
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>Conservation des notifications envoyées (jours)</Label>
               <Input
-                value={smtpFromName}
-                onChange={(event) => setSmtpFromName(event.target.value)}
+                type="number"
+                min={1}
+                value={notificationRetentionDays}
+                onChange={(event) => setNotificationRetentionDays(event.target.value)}
+              />
+            </div>
+
+            <div className="rounded-md border bg-muted/30 p-3">
+              <div className="text-sm font-medium">Mode défini par le propriétaire</div>
+              <div className="mt-3 grid gap-3 md:grid-cols-2">
+                <div>
+                  <div className="text-xs text-muted-foreground">Mode de fonctionnement</div>
+                  <div className="mt-1 text-sm font-medium">
+                    {serverMode === "with-server" ? "Avec serveur" : "Sans serveur"}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-muted-foreground">Mode d'envoi</div>
+                  <div className="mt-1 text-sm font-medium">
+                    {deliveryMode === "backend"
+                      ? "Serveur backend"
+                      : "Email direct depuis l'application"}
+                  </div>
+                </div>
+              </div>
+              <p className="mt-3 text-sm text-muted-foreground">{modeDescription}</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Ce mode est géré par le propriétaire de l'application.
+              </p>
+            </div>
+          </div>
+        ) : null}
+
+        {showSmtpSettings ? (
+          <div className="space-y-4 rounded-lg border bg-muted/30 p-4">
+            <div>
+              <h4 className="font-medium">Paramètres email SMTP</h4>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {isWithoutServerMode
+                  ? "Le mode sans serveur utilise l'envoi email direct depuis l'application."
+                  : "En mode avec serveur, ces paramètres restent disponibles si vous activez plus tard l'envoi direct."}
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>Type de compte email</Label>
+              <Select
+                value={smtpProviderType}
+                onValueChange={(value) => onSmtpProviderTypeChange(value as SmtpProviderType)}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Type de compte email" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="gmail">Gmail</SelectItem>
+                  <SelectItem value="professional">
+                    Email professionnel / domaine personnalisé
+                  </SelectItem>
+                  <SelectItem value="custom">Configuration personnalisée</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {isGmailProvider ? (
+              <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-950">
+                Pour Gmail, utilisez un mot de passe d'application, pas le mot de passe
+                normal du compte Gmail.
+              </div>
+            ) : null}
+
+            {isProfessionalProvider ? (
+              <div className="space-y-1 rounded-md border bg-background px-3 py-3 text-sm text-muted-foreground">
+                <p>
+                  Utilisez les paramètres SMTP fournis par votre hébergeur email, par
+                  exemple Hostinger, OVH, cPanel, Zoho, Outlook professionnel, etc.
+                </p>
+                <p>
+                  Exemples : <code>smtp.yourdomain.com</code>,{" "}
+                  <code>mail.yourdomain.com</code>, Port 587 TLS, Port 465 SSL.
+                </p>
+              </div>
+            ) : null}
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label>Hôte SMTP</Label>
+                <Input
+                  value={smtpHost}
+                  onChange={(event) => setSmtpHost(event.target.value)}
+                  placeholder="smtp.exemple.com"
+                  readOnly={isGmailProvider}
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Port SMTP</Label>
+                <Input
+                  type="number"
+                  value={smtpPort}
+                  onChange={(event) => setSmtpPort(event.target.value)}
+                  min={1}
+                  readOnly={isGmailProvider}
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Nom d'utilisateur SMTP</Label>
+                <Input
+                  value={smtpUsername}
+                  onChange={(event) => onSmtpUsernameChange(event.target.value)}
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Mot de passe SMTP</Label>
+                <div className="relative">
+                  <Input
+                    type={isSmtpPasswordVisible ? "text" : "password"}
+                    value={smtpPassword}
+                    onChange={(event) => setSmtpPassword(event.target.value)}
+                    className={showSmtpPasswordToggle ? APP_INPUT_WITH_RIGHT_ICON_CLASS_NAME : undefined}
+                  />
+                  {showSmtpPasswordToggle ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="absolute right-1 top-1/2 h-7 w-7 -translate-y-1/2 text-muted-foreground"
+                      aria-label={
+                        isSmtpPasswordVisible
+                          ? "Masquer le mot de passe SMTP"
+                          : "Afficher le mot de passe SMTP"
+                      }
+                      onClick={toggleSmtpPasswordVisibility}
+                    >
+                      {isSmtpPasswordVisible ? (
+                        <EyeOff className="h-4 w-4" />
+                      ) : (
+                        <Eye className="h-4 w-4" />
+                      )}
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Email expéditeur</Label>
+                <Input
+                  type="email"
+                  value={smtpFromEmail}
+                  onChange={(event) => setSmtpFromEmail(event.target.value)}
+                  readOnly={isGmailProvider}
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Nom expéditeur</Label>
+                <Input
+                  value={smtpFromName}
+                  onChange={(event) => setSmtpFromName(event.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between rounded-md border bg-background px-3 py-2">
+              <div>
+                <div className="text-sm font-medium">Connexion SMTP sécurisée</div>
+                <div className="text-xs text-muted-foreground">
+                  Active TLS / STARTTLS pour l'envoi direct.
+                </div>
+              </div>
+              <Switch
+                checked={smtpSecure}
+                onCheckedChange={(checked) => {
+                  if (!isGmailProvider) {
+                    setSmtpSecure(checked);
+                  }
+                }}
+                disabled={isGmailProvider}
               />
             </div>
           </div>
-
-          <div className="flex items-center justify-between rounded-md border bg-background px-3 py-2">
-            <div>
-              <div className="text-sm font-medium">Connexion SMTP sécurisée</div>
-              <div className="text-xs text-muted-foreground">
-                Active TLS / STARTTLS pour l'envoi direct.
-              </div>
-            </div>
-            <Switch
-              checked={smtpSecure}
-              onCheckedChange={(checked) => {
-                if (!isGmailProvider) {
-                  setSmtpSecure(checked);
-                }
-              }}
-              disabled={isGmailProvider}
-            />
-          </div>
-        </div>
+        ) : null}
 
         <div className="flex flex-wrap gap-2 pt-2">
-          {showSmtpTestButton ? (
+          {showSmtpTestButton && showSmtpSettings ? (
             <Button
               variant="outline"
+              className={actionButtonClassName}
               onClick={() => void testEmail()}
               disabled={isSaving || isTestingEmail}
             >
@@ -575,7 +592,11 @@ export function AdminSettingsFormCard({
             </Button>
           ) : null}
 
-          <Button onClick={() => void save()} disabled={isSaving || isTestingEmail}>
+          <Button
+            className={actionButtonClassName}
+            onClick={() => void save()}
+            disabled={isSaving || isTestingEmail}
+          >
             {isSaving ? "Enregistrement..." : submitLabel}
           </Button>
         </div>

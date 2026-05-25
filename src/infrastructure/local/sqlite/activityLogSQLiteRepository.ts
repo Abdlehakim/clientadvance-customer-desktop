@@ -1,6 +1,10 @@
 import type { ActivityLogRepository } from "@/domain/repositories";
 import type { ActivityLog, ActivityLogCreateInput } from "@/domain/types";
 import { uid } from "@/infrastructure/local/localStorageDatabase";
+import {
+  ACTIVITY_LOG_RETENTION_DAYS,
+  getActivityLogRetentionCutoffIso,
+} from "@/services/activityLogRetention";
 import { getDb, type SqliteRow } from "./sqliteClient";
 
 interface ActivityLogSqliteRow extends SqliteRow {
@@ -57,8 +61,23 @@ function toActivityLog(row: ActivityLogSqliteRow): ActivityLog {
   };
 }
 
+export async function cleanupOldActivityLogs(retentionDays = ACTIVITY_LOG_RETENTION_DAYS) {
+  const db = await getDb();
+  const result = await db.execute(
+    `
+      DELETE FROM activity_logs
+      WHERE created_at < ?
+    `,
+    [getActivityLogRetentionCutoffIso(retentionDays)],
+  );
+
+  return result.rowsAffected;
+}
+
 export const activityLogSQLiteRepository: ActivityLogRepository = {
   async getAll() {
+    await cleanupOldActivityLogs();
+
     const db = await getDb();
     const rows = await db.query<ActivityLogSqliteRow>(
       `
@@ -81,6 +100,8 @@ export const activityLogSQLiteRepository: ActivityLogRepository = {
     return rows.map(toActivityLog);
   },
   async create(input: ActivityLogCreateInput) {
+    await cleanupOldActivityLogs();
+
     const log: ActivityLog = {
       ...input,
       id: uid(),

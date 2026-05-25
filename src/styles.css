@@ -89,6 +89,331 @@
   body { background-color: var(--color-background); color: var(--color-foreground); font-feature-settings: "cv11", "ss01"; }
 }
 
+button:not(:disabled):not([data-sidebar="rail"]) {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+.app-input {
+  width: 100%;
+  height: 42px;
+  min-height: 42px;
+  border: 1px solid #cfd6e1;
+  border-radius: 4px;
+  background-color: #fff;
+  padding: 6px 10px;
+  font-size: 14px;
+  line-height: 1.25rem;
+  font-weight: 400;
+  color: #0b1220;
+  box-shadow: none;
+  box-sizing: border-box;
+}
+
+.app-input::placeholder {
+  color: #64748b;
+  opacity: 1;
+}
+
+.app-input:disabled,
+.app-input[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.app-input:focus,
+.app-input:focus-visible,
+.app-input[data-state="open"] {
+  outline: none;
+  border-color: #7c3aed;
+  box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.16);
+}
+
+.app-input--with-left-icon {
+  padding-left: 36px;
+}
+
+.app-input--with-right-icon {
+  padding-right: 40px;
+}
+
+.app-input--phone-number {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.app-input--textarea {
+  height: auto;
+  min-height: 78px;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+.app-phone-prefix {
+  display: flex;
+  height: 42px;
+  min-height: 42px;
+  flex-shrink: 0;
+  align-items: center;
+  border: 1px solid #cfd6e1;
+  border-right: 0;
+  border-radius: 4px 0 0 4px;
+  background-color: #fff;
+  padding: 6px 10px;
+  font-size: 14px;
+  line-height: 1.25rem;
+  font-weight: 400;
+  color: #0b1220;
+  box-shadow: none;
+  box-sizing: border-box;
+}
+
+.swb-date-picker {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.swb-date-picker input {
+  flex: 1 1 auto;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.payment-time-picker {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.payment-time-picker__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.swb-date-picker__panel.payment-time-picker__panel {
+  top: calc(100% + 6px);
+  right: 0;
+  left: auto;
+  z-index: 100020;
+  width: max(220px, 100%);
+}
+
+.payment-time-picker__columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr 0.9fr;
+  gap: 8px;
+}
+
+.payment-time-picker__column {
+  min-width: 0;
+}
+
+.payment-time-picker__column-title {
+  margin-bottom: 6px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: #64748b;
+}
+
+.payment-time-picker__options {
+  display: grid;
+  gap: 4px;
+  max-height: 178px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.payment-time-picker__options--period {
+  max-height: none;
+}
+
+.payment-time-picker__option {
+  min-height: 24px;
+}
+
+.swb-date-picker__toggle {
+  width: 38px;
+  min-width: 38px;
+  height: 42px;
+  border: 1px solid #cfd6e1;
+  border-radius: 4px;
+  background: #f8fafc;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #0b1220;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.swb-date-picker__toggle:hover,
+.swb-date-picker.is-open .swb-date-picker__toggle,
+.payment-time-picker.is-open .swb-date-picker__toggle {
+  border-color: #7c3aed;
+  color: #4c1d95;
+  background: #ede9fe;
+}
+
+.swb-date-picker__toggle:focus,
+.swb-date-picker__toggle:focus-visible {
+  outline: none;
+  border-color: #7c3aed;
+  color: #4c1d95;
+  background: #ede9fe;
+  box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.16);
+}
+
+.swb-date-picker__toggle-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.swb-date-picker__panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 50;
+  background: #fff;
+  border: 1px solid rgba(15, 23, 42, 0.15);
+  border-radius: 10px;
+  box-shadow: 0 18px 30px rgba(15, 23, 42, 0.18);
+  padding: 12px;
+  min-width: 220px;
+  max-width: 320px;
+  width: max(220px, 100%);
+}
+
+.swb-date-picker__panel[hidden] {
+  display: none;
+}
+
+.swb-date-picker__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.swb-date-picker__month {
+  flex: 1;
+  text-align: center;
+  font-weight: 600;
+  text-transform: capitalize;
+  color: #0b1220;
+}
+
+.swb-date-picker__nav {
+  border: none;
+  border-radius: 6px;
+  width: 32px;
+  height: 32px;
+  background: #f1f5f9;
+  color: #0f172a;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.swb-date-picker__nav:hover {
+  background: #e0e7ff;
+  color: #312e81;
+}
+
+.swb-date-picker__weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  text-align: center;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: #64748b;
+  margin-bottom: 4px;
+}
+
+.swb-date-picker__grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.swb-date-picker__day {
+  border: none;
+  border-radius: 6px;
+  padding: 6px 0;
+  font-size: 10px;
+  line-height: 1;
+  width: 100%;
+  text-align: center;
+  background: #f8fafc;
+  color: #0f172a;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.swb-date-picker__day:hover {
+  background: #e0e7ff;
+  color: #312e81;
+}
+
+.swb-date-picker__day.is-outside {
+  color: #94a3b8;
+  background: transparent;
+}
+
+.swb-date-picker__day.is-today {
+  box-shadow: inset 0 0 0 1px rgba(124, 58, 237, 0.6);
+}
+
+.swb-date-picker__day.is-selected {
+  background: #7c3aed;
+  color: #fff;
+  box-shadow: none;
+}
+
+.swb-date-picker__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.swb-date-picker__footer-btn {
+  flex: 1;
+  border: 1px solid #cbd5f5;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 10px;
+  font-weight: 600;
+  background: #eef2ff;
+  color: #4338ca;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.swb-date-picker__footer-btn:hover {
+  background: #e0e7ff;
+}
+
+.swb-date-picker__footer-btn--muted {
+  background: transparent;
+  color: #475569;
+  border-color: #cfd6e1;
+}
+
+.swb-date-picker__footer-btn--muted:hover {
+  background: #f8fafc;
+}
+
 @keyframes modal-surface-enter {
   from {
     opacity: 0;

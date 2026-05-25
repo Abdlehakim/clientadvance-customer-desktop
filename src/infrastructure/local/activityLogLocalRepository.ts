@@ -1,10 +1,25 @@
 import type { ActivityLogRepository } from "@/domain/repositories";
 import type { ActivityLog } from "@/domain/types";
 import { KEYS, read, uid, write } from "./localStorageDatabase";
+import {
+  ACTIVITY_LOG_RETENTION_DAYS,
+  filterActivityLogsByRetention,
+} from "@/services/activityLogRetention";
+
+export function cleanupOldActivityLogs(retentionDays = ACTIVITY_LOG_RETENTION_DAYS) {
+  const logs = read<ActivityLog[]>(KEYS.logs, []);
+  const retainedLogs = filterActivityLogsByRetention(logs, retentionDays);
+
+  if (retainedLogs.length !== logs.length) {
+    write(KEYS.logs, retainedLogs);
+  }
+
+  return logs.length - retainedLogs.length;
+}
 
 export const activityLogLocalRepository: ActivityLogRepository = {
   getAll() {
-    return read<ActivityLog[]>(KEYS.logs, []);
+    return filterActivityLogsByRetention(read<ActivityLog[]>(KEYS.logs, []));
   },
   create(input) {
     const log: ActivityLog = {
@@ -15,7 +30,10 @@ export const activityLogLocalRepository: ActivityLogRepository = {
       sync_status: "pending",
     };
 
-    write(KEYS.logs, [log, ...read<ActivityLog[]>(KEYS.logs, [])]);
+    write(KEYS.logs, [
+      log,
+      ...filterActivityLogsByRetention(read<ActivityLog[]>(KEYS.logs, [])),
+    ]);
     return log;
   },
 };
