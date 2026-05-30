@@ -3,6 +3,7 @@ export type Role = "admin" | "employe";
 export interface User {
   id: string;
   email: string;
+  phone?: string;
   password: string; // kept empty in persisted session payloads
   name: string;
   role: Role;

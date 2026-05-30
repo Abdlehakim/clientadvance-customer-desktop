@@ -1,5 +1,6 @@
 import * as React from "react";
 import { createPortal } from "react-dom";
+import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-react";
 
 import { APP_INPUT_CLASS_NAME } from "@/components/inputStyles";
 import { cn } from "@/lib/utils";
@@ -15,7 +16,10 @@ type DatePickerInputProps = {
 };
 
 const DEFAULT_WEEKDAYS = ["Lu", "Ma", "Me", "Je", "Ve", "Sa", "Di"];
-const DATE_VALUE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+const ISO_DATE_VALUE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+const LONG_DATE_INPUT_PATTERN = /^(\d{2})[./-](\d{2})[./-](\d{4})$/;
+const SHORT_DATE_INPUT_PATTERN = /^(\d{2})-(\d{2})-(\d{2})$/;
+const SHORT_YEAR_PIVOT = 70;
 
 function isoDateString(date: Date) {
   const year = date.getFullYear();
@@ -25,16 +29,15 @@ function isoDateString(date: Date) {
   return `${year}-${month}-${day}`;
 }
 
-function parseDateString(value: string) {
-  const match = DATE_VALUE_PATTERN.exec(value);
+function displayDateString(date: Date) {
+  const day = String(date.getDate()).padStart(2, "0");
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const year = String(date.getFullYear()).slice(-2);
 
-  if (!match) {
-    return null;
-  }
+  return `${day}-${month}-${year}`;
+}
 
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
+function createValidDate(year: number, month: number, day: number) {
   const candidate = new Date(year, month - 1, day);
 
   if (
@@ -47,6 +50,68 @@ function parseDateString(value: string) {
   }
 
   return candidate;
+}
+
+function parseDateString(value: string) {
+  const match = ISO_DATE_VALUE_PATTERN.exec(value);
+
+  if (!match) {
+    return null;
+  }
+
+  return createValidDate(Number(match[1]), Number(match[2]), Number(match[3]));
+}
+
+function shortYearToFullYear(year: number) {
+  return year >= SHORT_YEAR_PIVOT ? 1900 + year : 2000 + year;
+}
+
+function parseTypedDateString(value: string) {
+  const match = SHORT_DATE_INPUT_PATTERN.exec(value);
+
+  if (!match) {
+    return null;
+  }
+
+  return createValidDate(shortYearToFullYear(Number(match[3])), Number(match[2]), Number(match[1]));
+}
+
+function normalizeTypedDateValue(value: string) {
+  const trimmed = value.trim();
+
+  if (!trimmed) {
+    return "";
+  }
+
+  const isoDate = parseDateString(trimmed);
+
+  if (isoDate) {
+    return displayDateString(isoDate);
+  }
+
+  const longDateMatch = LONG_DATE_INPUT_PATTERN.exec(trimmed);
+
+  if (longDateMatch) {
+    return `${longDateMatch[1]}-${longDateMatch[2]}-${longDateMatch[3].slice(-2)}`;
+  }
+
+  const digits = trimmed.replace(/\D/g, "").slice(0, 6);
+
+  if (digits.length <= 2) {
+    return digits;
+  }
+
+  if (digits.length <= 4) {
+    return `${digits.slice(0, 2)}-${digits.slice(2)}`;
+  }
+
+  return `${digits.slice(0, 2)}-${digits.slice(2, 4)}-${digits.slice(4)}`;
+}
+
+function formatInputValue(value: string) {
+  const date = parseDateString(value);
+
+  return date ? displayDateString(date) : "";
 }
 
 function alignViewDate(date: Date | null) {
@@ -120,8 +185,10 @@ export function DatePickerInput({
   const panelId = `${inputId || generatedId || "swbDatePicker"}Panel`;
   const wrapperRef = React.useRef<HTMLDivElement>(null);
   const panelRef = React.useRef<HTMLDivElement>(null);
+  const isInputFocusedRef = React.useRef(false);
   const locale = React.useMemo(() => getLocale(), []);
   const selectedDate = React.useMemo(() => parseDateString(value), [value]);
+  const [inputValue, setInputValue] = React.useState(() => formatInputValue(value));
   const [viewDate, setViewDate] = React.useState(() => alignViewDate(selectedDate));
   const [isOpen, setIsOpen] = React.useState(false);
   const [isMounted, setIsMounted] = React.useState(false);
@@ -133,6 +200,10 @@ export function DatePickerInput({
 
   React.useEffect(() => {
     const nextDate = parseDateString(value);
+
+    if (!isInputFocusedRef.current) {
+      setInputValue(formatInputValue(value));
+    }
 
     if (nextDate) {
       setViewDate(alignViewDate(nextDate));
@@ -255,22 +326,17 @@ export function DatePickerInput({
         closePanel();
       }
     };
-    const focusPanel = window.requestAnimationFrame(() => {
-      panelRef.current?.focus();
-    });
-
     document.addEventListener("click", outsideClick);
     document.addEventListener("keydown", handleKeydown, true);
 
     return () => {
-      window.cancelAnimationFrame(focusPanel);
       document.removeEventListener("click", outsideClick);
       document.removeEventListener("keydown", handleKeydown, true);
     };
   }, [closePanel, isOpen]);
 
   const monthLabel = formatMonth(viewDate, locale);
-  const startOffset = ((viewDate.getDay() + 6) % 7) || 0;
+  const startOffset = (viewDate.getDay() + 6) % 7 || 0;
   const daysInMonth = new Date(viewDate.getFullYear(), viewDate.getMonth() + 1, 0).getDate();
   const totalCells = Math.ceil((startOffset + daysInMonth) / 7) * 7;
   const todayIso = isoDateString(new Date());
@@ -284,6 +350,7 @@ export function DatePickerInput({
   });
 
   const selectDate = (date: Date, isoValue: string) => {
+    setInputValue(displayDateString(date));
     setViewDate(alignViewDate(date));
     onChange(isoValue);
     closePanel();
@@ -292,15 +359,62 @@ export function DatePickerInput({
   const selectToday = () => {
     const today = new Date();
 
+    setInputValue(displayDateString(today));
     setViewDate(alignViewDate(today));
     onChange(isoDateString(today));
     closePanel();
   };
 
   const clearDate = () => {
+    setInputValue("");
     setViewDate(alignViewDate(null));
     onChange("");
     closePanel();
+  };
+
+  const changeViewMonth = React.useCallback((monthDelta: number) => {
+    setViewDate((date) => new Date(date.getFullYear(), date.getMonth() + monthDelta, 1));
+  }, []);
+
+  const applyTypedValue = React.useCallback(
+    (nextInputValue: string) => {
+      const nextDate = parseTypedDateString(nextInputValue);
+
+      if (!nextInputValue || !nextDate) {
+        onChange("");
+        return;
+      }
+
+      setViewDate(alignViewDate(nextDate));
+      onChange(isoDateString(nextDate));
+    },
+    [onChange],
+  );
+
+  const handleInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const nextInputValue = normalizeTypedDateValue(event.target.value);
+
+    setInputValue(nextInputValue);
+    applyTypedValue(nextInputValue);
+  };
+
+  const handleInputBlur = () => {
+    isInputFocusedRef.current = false;
+
+    const nextInputValue = normalizeTypedDateValue(inputValue);
+    const nextDate = parseTypedDateString(nextInputValue);
+
+    if (!nextInputValue || !nextDate) {
+      setInputValue(nextInputValue);
+      onChange("");
+      return;
+    }
+
+    const normalizedInputValue = displayDateString(nextDate);
+
+    setInputValue(normalizedInputValue);
+    setViewDate(alignViewDate(nextDate));
+    onChange(isoDateString(nextDate));
   };
 
   const panel = (
@@ -314,27 +428,49 @@ export function DatePickerInput({
       aria-label="Choisir une date"
       tabIndex={-1}
       style={panelStyle}
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={(event) => event.stopPropagation()}
     >
       <div className="swb-date-picker__header">
-        <button
-          type="button"
-          className="swb-date-picker__nav"
-          aria-label="Mois precedent"
-          onClick={() => setViewDate((date) => new Date(date.getFullYear(), date.getMonth() - 1, 1))}
-        >
-          <span aria-hidden="true">&lt;</span>
-        </button>
+        <div className="swb-date-picker__nav-group">
+          <button
+            type="button"
+            className="swb-date-picker__nav"
+            aria-label="Annee precedente"
+            onClick={() => changeViewMonth(-12)}
+          >
+            <ChevronsLeft className="swb-date-picker__nav-icon" aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            className="swb-date-picker__nav"
+            aria-label="Mois precedent"
+            onClick={() => changeViewMonth(-1)}
+          >
+            <ChevronLeft className="swb-date-picker__nav-icon" aria-hidden="true" />
+          </button>
+        </div>
         <div className="swb-date-picker__month" aria-live="polite">
           {monthLabel}
         </div>
-        <button
-          type="button"
-          className="swb-date-picker__nav"
-          aria-label="Mois suivant"
-          onClick={() => setViewDate((date) => new Date(date.getFullYear(), date.getMonth() + 1, 1))}
-        >
-          <span aria-hidden="true">&gt;</span>
-        </button>
+        <div className="swb-date-picker__nav-group">
+          <button
+            type="button"
+            className="swb-date-picker__nav"
+            aria-label="Mois suivant"
+            onClick={() => changeViewMonth(1)}
+          >
+            <ChevronRight className="swb-date-picker__nav-icon" aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            className="swb-date-picker__nav"
+            aria-label="Annee suivante"
+            onClick={() => changeViewMonth(12)}
+          >
+            <ChevronsRight className="swb-date-picker__nav-icon" aria-hidden="true" />
+          </button>
+        </div>
       </div>
       <div className="swb-date-picker__weekdays">
         {DEFAULT_WEEKDAYS.map((weekday) => (
@@ -376,7 +512,11 @@ export function DatePickerInput({
   );
 
   return (
-    <div ref={wrapperRef} className={cn("swb-date-picker", isOpen && "is-open", className)} data-date-picker>
+    <div
+      ref={wrapperRef}
+      className={cn("swb-date-picker", isOpen && "is-open", className)}
+      data-date-picker
+    >
       <input
         id={inputId}
         className={cn(APP_INPUT_CLASS_NAME, inputClassName)}
@@ -385,14 +525,18 @@ export function DatePickerInput({
         placeholder={placeholder}
         autoComplete="off"
         spellCheck={false}
-        value={value}
-        readOnly
+        value={inputValue}
         disabled={disabled}
         aria-haspopup="dialog"
         aria-expanded={isOpen}
         aria-controls={panelId}
         role="combobox"
         onClick={openPanel}
+        onFocus={() => {
+          isInputFocusedRef.current = true;
+        }}
+        onChange={handleInputChange}
+        onBlur={handleInputBlur}
         onKeyDown={(event) => {
           if (event.key === "Enter" || event.key === " ") {
             event.preventDefault();
@@ -421,7 +565,9 @@ export function DatePickerInput({
       >
         <CalendarIcon />
       </button>
-      {!isOpen ? <div id={panelId} className="swb-date-picker__panel" data-date-picker-panel hidden /> : null}
+      {!isOpen ? (
+        <div id={panelId} className="swb-date-picker__panel" data-date-picker-panel hidden />
+      ) : null}
       {isOpen && isMounted ? createPortal(panel, document.body) : null}
     </div>
   );

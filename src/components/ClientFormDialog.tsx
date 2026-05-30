@@ -1,8 +1,15 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { DatePickerInput } from "@/components/DatePickerInput";
 import { TunisianPhoneInput } from "@/components/TunisianPhoneInput";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { createClient, updateClient } from "@/lib/data";
@@ -20,6 +27,8 @@ const emptyForm = {
   adresse: "",
   email: "",
   cin: "",
+  cinIssuedAt: "",
+  birthDate: "",
 };
 
 export function ClientFormDialog({
@@ -48,6 +57,8 @@ export function ClientFormDialog({
             adresse: client.adresse,
             email: client.email,
             cin: client.cin,
+            cinIssuedAt: client.cinIssuedAt ?? "",
+            birthDate: client.birthDate ?? "",
           }
         : emptyForm,
     );
@@ -98,12 +109,12 @@ export function ClientFormDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[480px]">
+      <DialogContent className="sm:max-w-[620px]">
         <DialogHeader>
           <DialogTitle>{client ? "Modifier le client" : "Ajouter un client"}</DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-4 py-2">
+        <div className="grid gap-4 py-2 sm:grid-cols-2 sm:gap-x-3">
           <div className="space-y-1.5">
             <Label htmlFor="nom_complet">Nom complet *</Label>
             <Input
@@ -119,6 +130,15 @@ export function ClientFormDialog({
           </div>
 
           <div className="space-y-1.5">
+            <Label htmlFor="birthDate">Date de naissance</Label>
+            <DatePickerInput
+              id="birthDate"
+              value={form.birthDate}
+              onChange={(birthDate) => setForm((current) => ({ ...current, birthDate }))}
+            />
+          </div>
+
+          <div className="space-y-1.5">
             <Label htmlFor="telephone">{"Num\u00e9ro de t\u00e9l\u00e9phone *"}</Label>
             <TunisianPhoneInput
               id="telephone"
@@ -130,23 +150,47 @@ export function ClientFormDialog({
             ) : null}
           </div>
 
-          {([
-            ["adresse", "Adresse"],
-            ["email", "Email"],
-            ["cin", "Num\u00e9ro CIN"],
-          ] as const).map(([key, label]) => (
-            <div key={key} className="space-y-1.5">
-              <Label htmlFor={key}>{label}</Label>
-              <Input
-                id={key}
-                value={form[key]}
-                onChange={(event) =>
-                  setForm((current) => ({ ...current, [key]: event.target.value }))
-                }
-              />
-              {errors[key] ? <p className="text-xs text-destructive">{errors[key]}</p> : null}
-            </div>
-          ))}
+          <div className="space-y-1.5">
+            <Label htmlFor="adresse">Adresse</Label>
+            <Input
+              id="adresse"
+              value={form.adresse}
+              onChange={(event) =>
+                setForm((current) => ({ ...current, adresse: event.target.value }))
+              }
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="email">Email</Label>
+            <Input
+              id="email"
+              value={form.email}
+              onChange={(event) =>
+                setForm((current) => ({ ...current, email: event.target.value }))
+              }
+            />
+            {errors.email ? <p className="text-xs text-destructive">{errors.email}</p> : null}
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="cin">{"Num\u00e9ro CIN"}</Label>
+            <Input
+              id="cin"
+              value={form.cin}
+              onChange={(event) => setForm((current) => ({ ...current, cin: event.target.value }))}
+            />
+            {errors.cin ? <p className="text-xs text-destructive">{errors.cin}</p> : null}
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="cinIssuedAt">CIN délivrée le</Label>
+            <DatePickerInput
+              id="cinIssuedAt"
+              value={form.cinIssuedAt}
+              onChange={(cinIssuedAt) => setForm((current) => ({ ...current, cinIssuedAt }))}
+            />
+          </div>
         </div>
 
         <DialogFooter>

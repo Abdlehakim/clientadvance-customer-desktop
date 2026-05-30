@@ -1,9 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useEffectEvent, useState } from "react";
 import type { FormEvent } from "react";
-import { KeyRound, ShieldAlert, Trash2, UserPlus } from "lucide-react";
+import { Eye, EyeOff, KeyRound, ShieldAlert, Trash2, UserPlus } from "lucide-react";
 import type { EmployeeAccount } from "@/domain/types";
 import { AppLayout } from "@/components/AppLayout";
+import { TunisianPhoneInput } from "@/components/TunisianPhoneInput";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -27,7 +28,15 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import {
   createEmployeeAccount,
   deleteEmployeeAccount,
@@ -42,9 +51,17 @@ import {
 } from "@/lib/data";
 import { useHasMounted } from "@/hooks/useHasMounted";
 import { useAppData } from "@/lib/useAppData";
+import {
+  TUNISIAN_PHONE_VALIDATION_MESSAGE,
+  formatTunisianPhoneForDisplay,
+  isValidTunisianPhone,
+  normalizeTunisianPhone,
+} from "@/lib/tunisianPhone";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/employes")({ component: EmployeeManagementPage });
+
+const PASSWORD_UNAVAILABLE_MESSAGE = "Mot de passe non disponible. Veuillez le réinitialiser.";
 
 function replaceEmployeeDisplayText(value: string) {
   return value.replace(/\b(employés|employé|employes|employe|employees|employee)\b/gi, "E-user");
@@ -72,10 +89,13 @@ function EmployeeManagementPage() {
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [phoneError, setPhoneError] = useState<string | null>(null);
   const [password, setPassword] = useState("");
   const [passwordTarget, setPasswordTarget] = useState<EmployeeAccount | null>(null);
   const [nextPassword, setNextPassword] = useState("");
   const [employeeToDelete, setEmployeeToDelete] = useState<EmployeeAccount | null>(null);
+  const [visiblePasswordIds, setVisiblePasswordIds] = useState<Set<string>>(() => new Set());
 
   const refreshEmployees = useEffectEvent(async () => {
     setLoading(true);
@@ -104,6 +124,15 @@ function EmployeeManagementPage() {
     void refreshEmployees();
   }, [mounted, serverMode, user?.role]);
 
+  useEffect(() => {
+    setVisiblePasswordIds((current) => {
+      const employeeIds = new Set(employees.map((employee) => employee.id));
+      const next = new Set([...current].filter((id) => employeeIds.has(id)));
+
+      return next.size === current.size ? current : next;
+    });
+  }, [employees]);
+
   if (!mounted) {
     return <div className="min-h-screen w-full bg-background" />;
   }
@@ -128,7 +157,23 @@ function EmployeeManagementPage() {
   const resetForm = () => {
     setName("");
     setEmail("");
+    setPhone("");
+    setPhoneError(null);
     setPassword("");
+  };
+
+  const setPasswordVisibility = (employeeId: string, visible: boolean) => {
+    setVisiblePasswordIds((current) => {
+      const next = new Set(current);
+
+      if (visible) {
+        next.add(employeeId);
+      } else {
+        next.delete(employeeId);
+      }
+
+      return next;
+    });
   };
 
   const onAddEmployee = () => {
@@ -157,12 +202,18 @@ function EmployeeManagementPage() {
       return;
     }
 
+    if (phone.trim().length > 0 && !isValidTunisianPhone(phone)) {
+      setPhoneError(TUNISIAN_PHONE_VALIDATION_MESSAGE);
+      return;
+    }
+
     setSubmitting(true);
 
     try {
       await createEmployeeAccount({
         name: name.trim(),
         email: email.trim(),
+        phone: phone.trim().length > 0 ? normalizeTunisianPhone(phone) : "",
         password,
         role: "employe",
       });
@@ -285,6 +336,7 @@ function EmployeeManagementPage() {
                 <TableRow>
                   <TableHead>Nom</TableHead>
                   <TableHead>Email</TableHead>
+                  <TableHead>{"T\u00e9l\u00e9phone"}</TableHead>
                   <TableHead>Rôle</TableHead>
                   <TableHead>Statut</TableHead>
                   <TableHead>Créé le</TableHead>
@@ -294,74 +346,125 @@ function EmployeeManagementPage() {
               <TableBody>
                 {loading ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
+                    <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
                       Chargement...
                     </TableCell>
                   </TableRow>
                 ) : employees.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
+                    <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
                       Aucun compte E-user.
                     </TableCell>
                   </TableRow>
                 ) : (
-                  employees.map((employee) => (
-                    <TableRow key={employee.id}>
-                      <TableCell className="font-medium">{employee.name}</TableCell>
-                      <TableCell>{employee.email}</TableCell>
-                      <TableCell>{getRoleDisplayLabel(employee.role)}</TableCell>
-                      <TableCell>
-                        <Badge
-                          variant="outline"
-                          className={
-                            employee.is_active
-                              ? "border-success/40 bg-success/10 text-[oklch(0.35_0.1_150)]"
-                              : "border-destructive/40 bg-destructive/10 text-destructive"
-                          }
-                        >
-                          {employee.is_active ? "Actif" : "Désactivé"}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>{formatDateFR(employee.created_at)}</TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex justify-end gap-2">
-                          <Button
-                            type="button"
+                  employees.map((employee) => {
+                    const isPasswordVisible = visiblePasswordIds.has(employee.id);
+                    const displayPassword =
+                      employee.displayPassword && employee.displayPassword.length > 0
+                        ? employee.displayPassword
+                        : null;
+
+                    return (
+                      <TableRow key={employee.id}>
+                        <TableCell className="font-medium">{employee.name}</TableCell>
+                        <TableCell>{employee.email}</TableCell>
+                        <TableCell>
+                          {formatTunisianPhoneForDisplay(employee.phone ?? "") || "\u2014"}
+                        </TableCell>
+                        <TableCell>{getRoleDisplayLabel(employee.role)}</TableCell>
+                        <TableCell>
+                          <Badge
                             variant="outline"
-                            size="sm"
-                            onClick={() => void onToggleActive(employee)}
-                            disabled={busyUserId === employee.id}
+                            className={
+                              employee.is_active
+                                ? "border-success/40 bg-success/10 text-[oklch(0.35_0.1_150)]"
+                                : "border-destructive/40 bg-destructive/10 text-destructive"
+                            }
                           >
-                            {employee.is_active ? "Désactiver" : "Activer"}
-                          </Button>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="outline"
-                            onClick={() => {
-                              setPasswordTarget(employee);
-                              setNextPassword("");
-                            }}
-                            disabled={busyUserId === employee.id}
-                          >
-                            <KeyRound className="mr-2 h-4 w-4" />
-                            Mot de passe
-                          </Button>
-                          {user?.role === "admin" && employee.id !== user.id ? (
+                            {employee.is_active ? "Actif" : "Désactivé"}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>{formatDateFR(employee.created_at)}</TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex justify-end gap-2">
                             <Button
                               type="button"
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => setEmployeeToDelete(employee)}
+                              variant="outline"
+                              size="sm"
+                              onClick={() => void onToggleActive(employee)}
                               disabled={busyUserId === employee.id}
                             >
-                              <Trash2 className="h-4 w-4 text-destructive" />
+                              {employee.is_active ? "Désactiver" : "Activer"}
                             </Button>
-                          ) : null}
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                setPasswordTarget(employee);
+                                setNextPassword("");
+                              }}
+                              disabled={busyUserId === employee.id}
+                            >
+                              <KeyRound className="mr-2 h-4 w-4" />
+                              Mot de passe
+                            </Button>
+                            <Popover
+                              open={isPasswordVisible}
+                              onOpenChange={(open) => setPasswordVisibility(employee.id, open)}
+                            >
+                              <PopoverTrigger asChild>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-8 w-8 cursor-pointer p-0"
+                                  aria-label={
+                                    isPasswordVisible
+                                      ? "Masquer le mot de passe"
+                                      : "Afficher le mot de passe"
+                                  }
+                                >
+                                  {isPasswordVisible ? (
+                                    <EyeOff className="h-4 w-4" aria-hidden="true" />
+                                  ) : (
+                                    <Eye className="h-4 w-4" aria-hidden="true" />
+                                  )}
+                                </Button>
+                              </PopoverTrigger>
+                              <PopoverContent
+                                align="end"
+                                side="top"
+                                className="w-72 p-3 text-left text-xs"
+                              >
+                                <p className="font-medium text-foreground">Mot de passe</p>
+                                {displayPassword ? (
+                                  <div className="mt-2 inline-flex max-w-full rounded-md border bg-muted px-2 py-1 font-mono text-xs text-foreground">
+                                    <span className="truncate">{displayPassword}</span>
+                                  </div>
+                                ) : (
+                                  <p className="mt-1 text-muted-foreground">
+                                    {PASSWORD_UNAVAILABLE_MESSAGE}
+                                  </p>
+                                )}
+                              </PopoverContent>
+                            </Popover>
+                            {user?.role === "admin" && employee.id !== user.id ? (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => setEmployeeToDelete(employee)}
+                                disabled={busyUserId === employee.id}
+                              >
+                                <Trash2 className="h-4 w-4 text-destructive" />
+                              </Button>
+                            ) : null}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })
                 )}
               </TableBody>
             </Table>
@@ -425,6 +528,20 @@ function EmployeeManagementPage() {
                 disabled={submitting || employeeLimitReached}
                 required
               />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="employee-phone">{"Num\u00e9ro de t\u00e9l\u00e9phone"}</Label>
+              <TunisianPhoneInput
+                id="employee-phone"
+                value={phone}
+                onChange={(nextPhone) => {
+                  setPhone(nextPhone);
+                  setPhoneError(null);
+                }}
+                disabled={submitting || employeeLimitReached}
+              />
+              {phoneError ? <p className="text-xs text-destructive">{phoneError}</p> : null}
             </div>
 
             <div className="space-y-1.5">

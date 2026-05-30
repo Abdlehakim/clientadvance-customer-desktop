@@ -25,6 +25,10 @@ import {
   isDemoAdminEnabled,
 } from "./defaultAdmin";
 import {
+  getTunisianLocalPhone,
+  normalizeStoredTunisianPhone,
+} from "@/lib/tunisianPhone";
+import {
   generateOfflinePasswordSalt,
   getOfflinePasswordIterations,
   hashOfflinePassword,
@@ -44,6 +48,9 @@ interface OfflineAuthRecord {
   password_hash: string;
   password_salt: string;
   password_iterations: number;
+  display_password: string;
+  phone: string;
+  phone_normalized: string;
   seeded: boolean;
   last_online_login_at: string | null;
   created_at: string;
@@ -64,6 +71,9 @@ interface OfflineAuthSqliteRow extends SqliteRow {
   password_hash: unknown;
   password_salt: unknown;
   password_iterations: unknown;
+  display_password: unknown;
+  phone: unknown;
+  phone_normalized: unknown;
   seeded: unknown;
   last_online_login_at: unknown;
   created_at: unknown;
@@ -80,6 +90,9 @@ type OfflineAuthVerificationResult =
 
 export const OFFLINE_LOGIN_UNAVAILABLE_MESSAGE =
   "Identifiants incorrects ou serveur indisponible.";
+const DUPLICATE_EMPLOYEE_EMAIL_MESSAGE = "Cet email est d\u00e9j\u00e0 utilis\u00e9.";
+const DUPLICATE_EMPLOYEE_PHONE_MESSAGE =
+  "Ce num\u00e9ro de t\u00e9l\u00e9phone est d\u00e9j\u00e0 utilis\u00e9.";
 
 let initializationPromise: Promise<void> | null = null;
 let sqliteAuthSessionHydrated = false;
@@ -90,6 +103,27 @@ function usesSqliteCredentialStore() {
 
 function normalizeEmail(email: string) {
   return email.trim().toLowerCase();
+}
+
+function normalizePhoneKey(value: string) {
+  const localPhone = getTunisianLocalPhone(value);
+  return /^\d{8}$/.test(localPhone) ? localPhone : "";
+}
+
+function resolveLoginIdentifier(identifier: string) {
+  const trimmedIdentifier = identifier.trim();
+
+  if (trimmedIdentifier.includes("@")) {
+    return {
+      type: "email" as const,
+      value: normalizeEmail(trimmedIdentifier),
+    };
+  }
+
+  return {
+    type: "phone" as const,
+    value: normalizePhoneKey(trimmedIdentifier),
+  };
 }
 
 function readString(value: unknown, fallback = "") {
@@ -140,6 +174,7 @@ function toSessionUser(record: OfflineAuthRecord): User {
   return {
     id: record.id,
     email: record.email,
+    phone: record.phone,
     password: "",
     name: record.name,
     role: record.role,
@@ -157,6 +192,8 @@ function toEmployeeAccount(record: OfflineAuthRecord): EmployeeAccount {
     is_active: record.is_active,
     created_at: record.created_at,
     updated_at: record.updated_at,
+    displayPassword: record.display_password,
+    phone: record.phone,
   };
 }
 
@@ -165,6 +202,9 @@ function normalizeLocalStorageRecord(
 ): OfflineAuthRecord {
   const now = new Date().toISOString();
   const passwordHash = readString(value?.password_hash);
+  const phone = normalizeStoredTunisianPhone(readString(value?.phone));
+  const phoneNormalized =
+    normalizePhoneKey(readString(value?.phone_normalized)) || normalizePhoneKey(phone);
 
   return {
     id: readString(value?.id),
@@ -181,6 +221,9 @@ function normalizeLocalStorageRecord(
       value?.password_iterations,
       getOfflinePasswordIterations(),
     ),
+    display_password: readString(value?.display_password),
+    phone,
+    phone_normalized: phoneNormalized,
     seeded: readBoolean(value?.seeded, false),
     last_online_login_at: readNullableString(value?.last_online_login_at),
     created_at: readString(value?.created_at, now),
@@ -191,6 +234,10 @@ function normalizeLocalStorageRecord(
 }
 
 function toOfflineAuthRecord(row: OfflineAuthSqliteRow): OfflineAuthRecord {
+  const phone = normalizeStoredTunisianPhone(readString(row.phone));
+  const phoneNormalized =
+    normalizePhoneKey(readString(row.phone_normalized)) || normalizePhoneKey(phone);
+
   return {
     id: readString(row.id),
     email: normalizeEmail(readString(row.email)),
@@ -206,6 +253,9 @@ function toOfflineAuthRecord(row: OfflineAuthSqliteRow): OfflineAuthRecord {
       row.password_iterations,
       getOfflinePasswordIterations(),
     ),
+    display_password: readString(row.display_password),
+    phone,
+    phone_normalized: phoneNormalized,
     seeded: readBoolean(row.seeded, false),
     last_online_login_at: readNullableString(row.last_online_login_at),
     created_at: readString(row.created_at),
@@ -219,7 +269,19 @@ function readLocalStorageRecords() {
   const currentRecords = read<OfflineAuthRecord[]>(KEYS.localUsers, []);
 
   if (currentRecords.length > 0) {
-    return currentRecords.map((record) => normalizeLocalStorageRecord(record));
+    const normalizedRecords = currentRecords.map((record) => normalizeLocalStorageRecord(record));
+    const shouldPersistNormalization = normalizedRecords.some(
+      (record, index) =>
+        currentRecords[index]?.phone !== record.phone ||
+        currentRecords[index]?.phone_normalized !== record.phone_normalized ||
+        currentRecords[index]?.display_password !== record.display_password,
+    );
+
+    if (shouldPersistNormalization) {
+      writeLocalStorageRecords(normalizedRecords);
+    }
+
+    return normalizedRecords;
   }
 
   const legacyRecords = read<OfflineAuthRecord[]>(KEYS.offlineCredentials, []);
@@ -261,6 +323,9 @@ function areRecordsEquivalent(left: OfflineAuthRecord, right: OfflineAuthRecord)
     left.password_hash === right.password_hash &&
     left.password_salt === right.password_salt &&
     left.password_iterations === right.password_iterations &&
+    left.display_password === right.display_password &&
+    left.phone === right.phone &&
+    left.phone_normalized === right.phone_normalized &&
     left.seeded === right.seeded &&
     left.last_online_login_at === right.last_online_login_at &&
     left.sync_status === right.sync_status &&
@@ -276,7 +341,9 @@ function createPlaceholderPassword(
 }
 
 async function createRecord(
-  user: Pick<User, "id" | "email" | "name" | "role" | "company_id" | "company_name">,
+  user: Pick<User, "id" | "email" | "name" | "role" | "company_id" | "company_name"> & {
+    phone?: string | null;
+  },
   options: {
     existing?: OfflineAuthRecord | null;
     password?: string;
@@ -286,6 +353,8 @@ async function createRecord(
     lastOnlineLoginAt?: string | null;
     syncStatus?: LocalUserSyncStatus;
     pendingSync?: boolean;
+    displayPassword?: string;
+    phone?: string | null;
     createdAt?: string;
     updatedAt?: string;
   } = {},
@@ -297,6 +366,14 @@ async function createRecord(
   const createdAt = options.createdAt ?? options.existing?.created_at ?? now;
   const hasPassword =
     typeof options.password === "string" && options.password.trim().length > 0;
+  const displayPassword =
+    user.role === "employe" && typeof options.password === "string" && options.password.length > 0
+      ? options.password
+      : options.displayPassword ?? options.existing?.display_password ?? "";
+  const phone = normalizeStoredTunisianPhone(
+    options.phone ?? user.phone ?? options.existing?.phone ?? "",
+  );
+  const phoneNormalized = normalizePhoneKey(phone);
   const offlineEnabled =
     options.offlineEnabled ?? (hasPassword ? true : options.existing?.offline_enabled ?? false);
 
@@ -324,6 +401,9 @@ async function createRecord(
     password_hash: passwordHash,
     password_salt: salt,
     password_iterations: iterations,
+    display_password: displayPassword,
+    phone,
+    phone_normalized: phoneNormalized,
     seeded: options.seeded ?? options.existing?.seeded ?? false,
     last_online_login_at:
       options.lastOnlineLoginAt !== undefined
@@ -409,6 +489,9 @@ async function getSqliteOfflineAuthRecordByEmail(email: string) {
         password_hash,
         password_salt,
         password_iterations,
+        display_password,
+        phone,
+        phone_normalized,
         seeded,
         last_online_login_at,
         created_at,
@@ -441,6 +524,9 @@ async function getSqliteOfflineAuthRecordById(id: string) {
         password_hash,
         password_salt,
         password_iterations,
+        display_password,
+        phone,
+        phone_normalized,
         seeded,
         last_online_login_at,
         created_at,
@@ -473,6 +559,9 @@ async function listSqliteOfflineAuthRecords() {
         password_hash,
         password_salt,
         password_iterations,
+        display_password,
+        phone,
+        phone_normalized,
         seeded,
         last_online_login_at,
         created_at,
@@ -503,13 +592,16 @@ async function upsertSqliteOfflineAuthRecord(record: OfflineAuthRecord) {
         password_hash,
         password_salt,
         password_iterations,
+        display_password,
+        phone,
+        phone_normalized,
         seeded,
         last_online_login_at,
         created_at,
         updated_at,
         sync_status,
         pending_sync
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(email) DO UPDATE SET
         id = excluded.id,
         name = excluded.name,
@@ -521,6 +613,9 @@ async function upsertSqliteOfflineAuthRecord(record: OfflineAuthRecord) {
         password_hash = excluded.password_hash,
         password_salt = excluded.password_salt,
         password_iterations = excluded.password_iterations,
+        display_password = excluded.display_password,
+        phone = excluded.phone,
+        phone_normalized = excluded.phone_normalized,
         seeded = excluded.seeded,
         last_online_login_at = excluded.last_online_login_at,
         created_at = excluded.created_at,
@@ -540,6 +635,9 @@ async function upsertSqliteOfflineAuthRecord(record: OfflineAuthRecord) {
       record.password_hash,
       record.password_salt,
       record.password_iterations,
+      record.display_password,
+      record.phone,
+      record.phone_normalized,
       record.seeded ? 1 : 0,
       record.last_online_login_at,
       record.created_at,
@@ -578,6 +676,9 @@ async function ensureSqliteDefaultAdminSeeded() {
         password_hash,
         password_salt,
         password_iterations,
+        display_password,
+        phone,
+        phone_normalized,
         seeded,
         last_online_login_at,
         created_at,
@@ -644,10 +745,86 @@ async function ensureSqliteDefaultAdminSeeded() {
   await upsertSqliteOfflineAuthRecord(adminRecord);
 }
 
+async function ensureSqliteAuthSchema() {
+  if (!usesSqliteCredentialStore()) {
+    return;
+  }
+
+  const db = await getDb();
+  const rows = await db.query<{ name: unknown }>("PRAGMA table_info(local_users)");
+  const columns = new Set(rows.map((row) => readString(row.name)));
+
+  const addColumnIfMissing = async (columnName: string, definition: string) => {
+    if (columns.has(columnName)) {
+      return;
+    }
+
+    await db.execute(`ALTER TABLE local_users ADD COLUMN ${columnName} ${definition}`);
+    columns.add(columnName);
+  };
+
+  await addColumnIfMissing("display_password", "TEXT NOT NULL DEFAULT ''");
+  await addColumnIfMissing("phone", "TEXT NOT NULL DEFAULT ''");
+  await addColumnIfMissing("phone_normalized", "TEXT NOT NULL DEFAULT ''");
+}
+
+async function backfillSqliteAuthPhoneKeys() {
+  if (!usesSqliteCredentialStore()) {
+    return;
+  }
+
+  const db = await getDb();
+  const rows = await db.query<{
+    id: unknown;
+    phone: unknown;
+    phone_normalized: unknown;
+  }>(
+    `
+      SELECT id, phone, phone_normalized
+      FROM local_users
+      WHERE role = 'employe'
+    `,
+  );
+
+  await Promise.all(
+    rows.map(async (row) => {
+      const nextPhoneNormalized = normalizePhoneKey(readString(row.phone));
+
+      if (readString(row.phone_normalized) === nextPhoneNormalized) {
+        return;
+      }
+
+      await db.execute(
+        `
+          UPDATE local_users
+          SET phone_normalized = ?
+          WHERE id = ?
+        `,
+        [nextPhoneNormalized, readString(row.id)],
+      );
+    }),
+  );
+}
+
 async function getLocalStorageOfflineAuthRecordByEmail(email: string) {
   return (
     readLocalStorageRecords().find(
       (record) => record.email === normalizeEmail(email),
+    ) ?? null
+  );
+}
+
+async function getLocalStorageOfflineAuthRecordByPhone(phone: string) {
+  const phoneKey = normalizePhoneKey(phone);
+
+  if (!phoneKey) {
+    return null;
+  }
+
+  return (
+    readLocalStorageRecords().find(
+      (record) =>
+        record.role === "employe" && record.phone_normalized === phoneKey,
     ) ?? null
   );
 }
@@ -689,6 +866,39 @@ async function getOfflineAuthRecordByEmail(email: string) {
   return getLocalStorageOfflineAuthRecordByEmail(email);
 }
 
+async function getOfflineAuthRecordByPhone(phone: string) {
+  if (usesSqliteCredentialStore()) {
+    const phoneKey = normalizePhoneKey(phone);
+
+    if (!phoneKey) {
+      return null;
+    }
+
+    return (
+      (await listSqliteOfflineAuthRecords()).find(
+        (record) =>
+          record.role === "employe" && record.phone_normalized === phoneKey,
+      ) ?? null
+    );
+  }
+
+  return getLocalStorageOfflineAuthRecordByPhone(phone);
+}
+
+async function getOfflineAuthRecordByIdentifier(identifier: string) {
+  const resolvedIdentifier = resolveLoginIdentifier(identifier);
+
+  if (resolvedIdentifier.type === "email") {
+    return getOfflineAuthRecordByEmail(resolvedIdentifier.value);
+  }
+
+  if (!resolvedIdentifier.value) {
+    return null;
+  }
+
+  return getOfflineAuthRecordByPhone(resolvedIdentifier.value);
+}
+
 async function getOfflineAuthRecordById(id: string) {
   if (usesSqliteCredentialStore()) {
     return getSqliteOfflineAuthRecordById(id);
@@ -712,6 +922,25 @@ async function upsertOfflineAuthRecord(record: OfflineAuthRecord) {
   }
 
   await upsertLocalStorageOfflineAuthRecord(record);
+}
+
+async function assertEmployeePhoneAvailable(phone: string, excludedId?: string) {
+  const phoneKey = normalizePhoneKey(phone);
+
+  if (!phoneKey) {
+    return;
+  }
+
+  const duplicate = (await listOfflineAuthRecords()).find(
+    (record) =>
+      record.role === "employe" &&
+      record.id !== excludedId &&
+      record.phone_normalized === phoneKey,
+  );
+
+  if (duplicate) {
+    throw new Error(DUPLICATE_EMPLOYEE_PHONE_MESSAGE);
+  }
 }
 
 async function verifyOfflineAuthRecord(
@@ -753,7 +982,9 @@ export async function initializeOfflineAuthStorage() {
 
   initializationPromise ??= (async () => {
     if (usesSqliteCredentialStore()) {
+      await ensureSqliteAuthSchema();
       await ensureSqliteDefaultAdminSeeded();
+      await backfillSqliteAuthPhoneKeys();
 
       if (!sqliteAuthSessionHydrated) {
         await hydrateSqliteAuthSession();
@@ -797,11 +1028,11 @@ export async function persistOfflineCredential(
 }
 
 export async function authenticateOfflineCredential(
-  email: string,
+  identifier: string,
   password: string,
 ): Promise<OfflineAuthVerificationResult> {
   await initializeOfflineAuthStorage();
-  const record = await getOfflineAuthRecordByEmail(email);
+  const record = await getOfflineAuthRecordByIdentifier(identifier);
   return verifyOfflineAuthRecord(record, password);
 }
 
@@ -861,17 +1092,21 @@ export async function createLocalEmployeeAccount(
   await initializeOfflineAuthStorage();
 
   const normalizedEmail = normalizeEmail(input.email);
+  const normalizedPhone = normalizeStoredTunisianPhone(input.phone ?? "");
   const existing = await getOfflineAuthRecordByEmail(normalizedEmail);
 
   if (existing) {
-    throw new Error("Un utilisateur avec cet email existe déjà");
+    throw new Error(DUPLICATE_EMPLOYEE_EMAIL_MESSAGE);
   }
+
+  await assertEmployeePhoneAvailable(normalizedPhone);
 
   const now = options.created_at ?? new Date().toISOString();
   const employee: EmployeeAccount = {
     id: options.id ?? uid(),
     name: input.name.trim(),
     email: normalizedEmail,
+    phone: normalizedPhone,
     role: "employe",
     is_active: options.is_active ?? true,
     created_at: now,
@@ -907,6 +1142,7 @@ export async function upsertLocalEmployeeAccount(
       id: employee.id,
       email: employee.email,
       name: employee.name,
+      phone: employee.phone,
       role: employee.role,
     },
     {
@@ -944,11 +1180,19 @@ export async function updateLocalEmployeeAccount(
     throw new Error("Utilisateur local introuvable");
   }
 
+  const normalizedPhone =
+    patch.phone !== undefined
+      ? normalizeStoredTunisianPhone(patch.phone)
+      : existing.phone;
+
+  await assertEmployeePhoneAvailable(normalizedPhone, existing.id);
+
   return upsertLocalEmployeeAccount(
     {
       id: existing.id,
       name: patch.name?.trim() || existing.name,
       email: existing.email,
+      phone: normalizedPhone,
       role: existing.role,
       is_active: patch.is_active ?? existing.is_active,
       created_at: existing.created_at,

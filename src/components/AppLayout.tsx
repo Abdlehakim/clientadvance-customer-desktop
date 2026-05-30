@@ -54,6 +54,13 @@ const allItems = [
   { to: "/dashboard", label: "Tableau de bord", icon: LayoutDashboard, admin: false },
   { to: "/clients", label: "Clients", icon: Users, admin: false },
   { to: "/paiements", label: "Paiements", icon: CreditCard, admin: false },
+  {
+    to: "/parametres-utilisateur",
+    label: "Paramètres",
+    icon: Settings,
+    admin: false,
+    employee: true,
+  },
   { to: "/employes", label: "Gestion des E-user", icon: UserCog, admin: true },
   { to: "/parametres", label: "Paramètres administrateur", icon: Settings, admin: true },
   { to: "/journal", label: "Journal des activités", icon: ScrollText, admin: true },
@@ -485,7 +492,17 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   };
 
   const isAdminUser = user?.role === "admin";
-  const items = allItems.filter((item) => !item.admin || user?.role === "admin");
+  const items = allItems.filter((item) => {
+    if (item.admin) {
+      return user?.role === "admin";
+    }
+
+    if ("employee" in item && item.employee) {
+      return user?.role === "employe";
+    }
+
+    return true;
+  });
   const pending = canReadAppState ? getPendingCount() : 0;
   const lastSync = canReadAppState ? getLastSync() : null;
   const notifications = canReadAppState ? getNotifications() : [];
@@ -751,7 +768,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
         </div>
         <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto p-3">
           {items.map((item) => {
-            const active = path.startsWith(item.to);
+            const active = path === item.to || path.startsWith(`${item.to}/`);
             const Icon = item.icon;
             return (
               <Link

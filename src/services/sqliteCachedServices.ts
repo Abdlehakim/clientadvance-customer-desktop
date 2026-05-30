@@ -82,6 +82,8 @@ interface ClientRow extends SqliteRow {
   adresse: unknown;
   email: unknown;
   cin: unknown;
+  cin_issued_at: unknown;
+  birth_date: unknown;
   created_at: unknown;
   updated_at: unknown;
   created_by: unknown;
@@ -212,6 +214,8 @@ function toClient(row: ClientRow): Client {
     adresse: readString(row.adresse),
     email: readString(row.email),
     cin: readString(row.cin),
+    cinIssuedAt: readString(row.cin_issued_at),
+    birthDate: readString(row.birth_date),
     created_at: readString(row.created_at),
     updated_at: readString(row.updated_at),
     created_by: readString(row.created_by),
@@ -313,6 +317,8 @@ async function loadClientsFromSqlite() {
         adresse,
         email,
         cin,
+        cin_issued_at,
+        birth_date,
         created_at,
         updated_at,
         created_by,
@@ -641,6 +647,8 @@ async function replaceClients(clients: Client[]) {
           adresse,
           email,
           cin,
+          cin_issued_at,
+          birth_date,
           created_at,
           updated_at,
           created_by,
@@ -649,7 +657,7 @@ async function replaceClients(clients: Client[]) {
           remote_updated_at,
           pending_sync,
           sync_status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         client.id,
@@ -658,6 +666,8 @@ async function replaceClients(clients: Client[]) {
         client.adresse,
         client.email,
         client.cin,
+        client.cinIssuedAt ?? "",
+        client.birthDate ?? "",
         client.created_at,
         client.updated_at,
         client.created_by,

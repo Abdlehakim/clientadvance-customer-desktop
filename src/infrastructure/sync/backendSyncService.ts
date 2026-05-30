@@ -29,6 +29,8 @@ interface SyncPushPayload {
     adresse: string;
     email: string;
     cin: string;
+    cinIssuedAt?: string;
+    birthDate?: string;
     created_at: string;
     updated_at: string;
     created_by: string;
@@ -111,6 +113,8 @@ interface SyncPullResponse {
     adresse: string;
     email: string;
     cin: string;
+    cinIssuedAt?: string;
+    birthDate?: string;
     created_at: string;
     updated_at: string;
     created_by: string;
@@ -442,6 +446,8 @@ function upsertClients(pulledClients: SyncPullResponse["clients"]) {
       adresse: serverClient.adresse,
       email: serverClient.email,
       cin: serverClient.cin,
+      cinIssuedAt: serverClient.cinIssuedAt ?? "",
+      birthDate: serverClient.birthDate ?? "",
       created_at: serverClient.created_at,
       updated_at: serverClient.updated_at,
       created_by: local?.created_by || serverClient.created_by,

@@ -60,6 +60,8 @@ CREATE TABLE IF NOT EXISTS clients (
   adresse TEXT NOT NULL DEFAULT '',
   email TEXT NOT NULL DEFAULT '',
   cin TEXT NOT NULL DEFAULT '',
+  cin_issued_at TEXT NOT NULL DEFAULT '',
+  birth_date TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   created_by TEXT NOT NULL DEFAULT '',
@@ -146,6 +148,9 @@ CREATE TABLE IF NOT EXISTS local_users (
   password_hash TEXT NOT NULL,
   password_salt TEXT NOT NULL,
   password_iterations INTEGER NOT NULL DEFAULT 120000,
+  display_password TEXT NOT NULL DEFAULT '',
+  phone TEXT NOT NULL DEFAULT '',
+  phone_normalized TEXT NOT NULL DEFAULT '',
   seeded INTEGER NOT NULL DEFAULT 0,
   last_online_login_at TEXT,
   created_at TEXT NOT NULL,
@@ -642,6 +647,44 @@ fn paths_match(left: &Path, right: &Path) -> bool {
   normalize_path(left) == normalize_path(right)
 }
 
+fn is_database_file_path(path: &Path) -> bool {
+  path
+    .file_name()
+    .and_then(|file_name| file_name.to_str())
+    .map(|file_name| file_name.eq_ignore_ascii_case(DATABASE_FILE_NAME))
+    .unwrap_or(false)
+}
+
+fn existing_parent_directory(path: &Path) -> Option<PathBuf> {
+  path
+    .parent()
+    .filter(|parent| parent.exists() && parent.is_dir())
+    .map(Path::to_path_buf)
+}
+
+fn resolve_saved_custom_database_directory(custom_path: &Path) -> Option<PathBuf> {
+  if custom_path.exists() {
+    if custom_path.is_dir() {
+      return Some(custom_path.to_path_buf());
+    }
+
+    if custom_path.is_file() || is_database_file_path(custom_path) {
+      return existing_parent_directory(custom_path);
+    }
+
+    return None;
+  }
+
+  if is_database_file_path(custom_path) {
+    return existing_parent_directory(custom_path);
+  }
+
+  existing_parent_directory(custom_path)?;
+  fs::create_dir_all(custom_path).ok()?;
+
+  custom_path.is_dir().then(|| custom_path.to_path_buf())
+}
+
 fn resolve_database_directory(app: &AppHandle) -> Result<(PathBuf, bool), String> {
   let default_directory = default_database_dir(app)?;
   let config = read_database_location_config(app);
@@ -661,9 +704,14 @@ fn resolve_database_directory(app: &AppHandle) -> Result<(PathBuf, bool), String
     return Ok((default_directory, false));
   }
 
-  if fs::create_dir_all(&custom_path).is_err() {
+  let Some(custom_path) = resolve_saved_custom_database_directory(&custom_path) else {
+    eprintln!(
+      "Saved SQLite database location '{}' is unavailable; using default location '{}'.",
+      custom_path.display(),
+      default_directory.display()
+    );
     return Ok((default_directory, false));
-  }
+  };
 
   if paths_match(&custom_path, &default_directory) {
     return Ok((default_directory, false));
@@ -680,6 +728,18 @@ fn database_info(app: &AppHandle) -> Result<SqliteDatabaseInfo, String> {
     directory: directory.to_string_lossy().into_owned(),
     is_custom,
   })
+}
+
+fn database_info_for_path(app: &AppHandle, path: &Path) -> Result<SqliteDatabaseInfo, String> {
+  let mut info = database_info(app)?;
+
+  info.path = path.to_string_lossy().into_owned();
+
+  if let Some(directory) = path.parent() {
+    info.directory = directory.to_string_lossy().into_owned();
+  }
+
+  Ok(info)
 }
 
 fn database_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -841,6 +901,18 @@ fn recreate_license_state_table_if_needed(connection: &Connection) -> Result<(),
 }
 
 fn ensure_schema_upgrades(connection: &Connection) -> Result<(), String> {
+  add_column_if_missing(
+    connection,
+    "clients",
+    "cin_issued_at",
+    "TEXT NOT NULL DEFAULT ''",
+  )?;
+  add_column_if_missing(
+    connection,
+    "clients",
+    "birth_date",
+    "TEXT NOT NULL DEFAULT ''",
+  )?;
   let setup_completed_added = add_column_if_missing(
     connection,
     "admin_settings",
@@ -930,6 +1002,24 @@ fn ensure_schema_upgrades(connection: &Connection) -> Result<(), String> {
     "local_users",
     "offline_enabled",
     "INTEGER NOT NULL DEFAULT 1",
+  )?;
+  add_column_if_missing(
+    connection,
+    "local_users",
+    "display_password",
+    "TEXT NOT NULL DEFAULT ''",
+  )?;
+  add_column_if_missing(
+    connection,
+    "local_users",
+    "phone",
+    "TEXT NOT NULL DEFAULT ''",
+  )?;
+  add_column_if_missing(
+    connection,
+    "local_users",
+    "phone_normalized",
+    "TEXT NOT NULL DEFAULT ''",
   )?;
   add_column_if_missing(
     connection,
@@ -1150,9 +1240,7 @@ fn sqlite_init(
     .map_err(|_| "Database access lock poisoned.".to_string())?;
   let (_connection, path) = open_database(&app)?;
 
-  let mut info = database_info(&app)?;
-  info.path = path.to_string_lossy().into_owned();
-  Ok(info)
+  database_info_for_path(&app, &path)
 }
 
 #[tauri::command]
@@ -1238,22 +1326,27 @@ fn get_database_location(
     .lock()
     .map_err(|_| "Database access lock poisoned.".to_string())?;
 
-  database_info(&app)
+  let (_connection, path) = open_database(&app)?;
+  database_info_for_path(&app, &path)
 }
 
 #[tauri::command]
 fn open_database_location(
   app: AppHandle,
   state: State<'_, DatabaseAccessState>,
-) -> Result<(), String> {
+) -> Result<SqliteDatabaseInfo, String> {
   let _guard = state
     .sqlite_lock
     .lock()
     .map_err(|_| "Database access lock poisoned.".to_string())?;
-  let info = database_info(&app)?;
-  let directory = PathBuf::from(info.directory);
+  let (_connection, path) = open_database(&app)?;
+  let info = database_info_for_path(&app, &path)?;
+  let directory = PathBuf::from(&info.directory);
 
-  open_path_in_file_explorer(&directory)
+  fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+  open_path_in_file_explorer(&directory)?;
+
+  Ok(info)
 }
 
 #[tauri::command]
@@ -1468,6 +1561,9 @@ fn send_smtp_email(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+  #[cfg(debug_assertions)]
+  let mut builder = tauri::Builder::default();
+  #[cfg(not(debug_assertions))]
   let builder = tauri::Builder::default();
 
   #[cfg(debug_assertions)]

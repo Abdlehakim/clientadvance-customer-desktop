@@ -14,6 +14,8 @@ interface ClientSqliteRow extends SqliteRow {
   adresse: unknown;
   email: unknown;
   cin: unknown;
+  cin_issued_at: unknown;
+  birth_date: unknown;
   created_at: unknown;
   updated_at: unknown;
   created_by: unknown;
@@ -62,6 +64,8 @@ function toClient(row: ClientSqliteRow): Client {
     adresse: readString(row.adresse),
     email: readString(row.email),
     cin: readString(row.cin),
+    cinIssuedAt: readString(row.cin_issued_at),
+    birthDate: readString(row.birth_date),
     created_at: readString(row.created_at),
     updated_at: readString(row.updated_at),
     created_by: readString(row.created_by),
@@ -84,6 +88,8 @@ async function getExistingClient(id: string) {
         adresse,
         email,
         cin,
+        cin_issued_at,
+        birth_date,
         created_at,
         updated_at,
         created_by,
@@ -114,6 +120,8 @@ export const clientSQLiteRepository: ClientRepository = {
           adresse,
           email,
           cin,
+          cin_issued_at,
+          birth_date,
           created_at,
           updated_at,
           created_by,
@@ -141,6 +149,8 @@ export const clientSQLiteRepository: ClientRepository = {
           adresse,
           email,
           cin,
+          cin_issued_at,
+          birth_date,
           created_at,
           updated_at,
           created_by,
@@ -163,6 +173,8 @@ export const clientSQLiteRepository: ClientRepository = {
     const user = authLocalRepository.getCurrentUser();
     const now = new Date().toISOString();
     const nextInput = {
+      cinIssuedAt: input.cinIssuedAt ?? "",
+      birthDate: input.birthDate ?? "",
       ...input,
       telephone: normalizeStoredTunisianPhone(input.telephone),
     };
@@ -189,6 +201,8 @@ export const clientSQLiteRepository: ClientRepository = {
           adresse,
           email,
           cin,
+          cin_issued_at,
+          birth_date,
           created_at,
           updated_at,
           created_by,
@@ -197,7 +211,7 @@ export const clientSQLiteRepository: ClientRepository = {
           remote_updated_at,
           pending_sync,
           sync_status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         client.id,
@@ -206,6 +220,8 @@ export const clientSQLiteRepository: ClientRepository = {
         client.adresse,
         client.email,
         client.cin,
+        client.cinIssuedAt ?? "",
+        client.birthDate ?? "",
         client.created_at,
         client.updated_at,
         client.created_by,
@@ -264,6 +280,8 @@ export const clientSQLiteRepository: ClientRepository = {
           adresse = ?,
           email = ?,
           cin = ?,
+          cin_issued_at = ?,
+          birth_date = ?,
           updated_at = ?,
           updated_by = ?,
           remote_updated_at = ?,
@@ -277,6 +295,8 @@ export const clientSQLiteRepository: ClientRepository = {
         next.adresse,
         next.email,
         next.cin,
+        next.cinIssuedAt ?? "",
+        next.birthDate ?? "",
         next.updated_at,
         next.updated_by,
         next.remote_updated_at ?? null,

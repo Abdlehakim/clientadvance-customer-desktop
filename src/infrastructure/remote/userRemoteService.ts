@@ -1,6 +1,7 @@
 import type {
   EmployeeAccount,
   EmployeeAccountCreateInput,
+  EmployeePasswordChangeInput,
   EmployeeAccountUpdateInput,
 } from "@/domain/types";
 import { apiFetch } from "./apiClient";
@@ -19,6 +20,12 @@ export const userRemoteService = {
     return apiFetch<EmployeeAccount>(`/users/${encodeURIComponent(id)}`, {
       method: "PATCH",
       body: JSON.stringify(patch),
+    });
+  },
+  changeOwnPassword(input: EmployeePasswordChangeInput) {
+    return apiFetch<EmployeeAccount>("/users/me/password", {
+      method: "PATCH",
+      body: JSON.stringify(input),
     });
   },
   delete(id: string) {

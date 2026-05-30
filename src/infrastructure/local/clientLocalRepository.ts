@@ -19,6 +19,8 @@ export const clientLocalRepository: ClientRepository = {
     const user = authLocalRepository.getCurrentUser();
     const now = new Date().toISOString();
     const nextInput = {
+      cinIssuedAt: input.cinIssuedAt ?? "",
+      birthDate: input.birthDate ?? "",
       ...input,
       telephone: normalizeStoredTunisianPhone(input.telephone),
     };

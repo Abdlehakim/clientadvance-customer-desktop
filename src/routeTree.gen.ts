@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as ParametresUtilisateurRouteImport } from './routes/parametres-utilisateur'
 import { Route as ParametresRouteImport } from './routes/parametres'
 import { Route as PaiementsRouteImport } from './routes/paiements'
 import { Route as JournalRouteImport } from './routes/journal'
@@ -18,6 +19,11 @@ import { Route as ClientsRouteImport } from './routes/clients'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ClientsClientIdRouteImport } from './routes/clients.$clientId'
 
+const ParametresUtilisateurRoute = ParametresUtilisateurRouteImport.update({
+  id: '/parametres-utilisateur',
+  path: '/parametres-utilisateur',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ParametresRoute = ParametresRouteImport.update({
   id: '/parametres',
   path: '/parametres',
@@ -67,6 +73,7 @@ export interface FileRoutesByFullPath {
   '/journal': typeof JournalRoute
   '/paiements': typeof PaiementsRoute
   '/parametres': typeof ParametresRoute
+  '/parametres-utilisateur': typeof ParametresUtilisateurRoute
   '/clients/$clientId': typeof ClientsClientIdRoute
 }
 export interface FileRoutesByTo {
@@ -77,6 +84,7 @@ export interface FileRoutesByTo {
   '/journal': typeof JournalRoute
   '/paiements': typeof PaiementsRoute
   '/parametres': typeof ParametresRoute
+  '/parametres-utilisateur': typeof ParametresUtilisateurRoute
   '/clients/$clientId': typeof ClientsClientIdRoute
 }
 export interface FileRoutesById {
@@ -88,6 +96,7 @@ export interface FileRoutesById {
   '/journal': typeof JournalRoute
   '/paiements': typeof PaiementsRoute
   '/parametres': typeof ParametresRoute
+  '/parametres-utilisateur': typeof ParametresUtilisateurRoute
   '/clients/$clientId': typeof ClientsClientIdRoute
 }
 export interface FileRouteTypes {
@@ -100,6 +109,7 @@ export interface FileRouteTypes {
     | '/journal'
     | '/paiements'
     | '/parametres'
+    | '/parametres-utilisateur'
     | '/clients/$clientId'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -110,6 +120,7 @@ export interface FileRouteTypes {
     | '/journal'
     | '/paiements'
     | '/parametres'
+    | '/parametres-utilisateur'
     | '/clients/$clientId'
   id:
     | '__root__'
@@ -120,6 +131,7 @@ export interface FileRouteTypes {
     | '/journal'
     | '/paiements'
     | '/parametres'
+    | '/parametres-utilisateur'
     | '/clients/$clientId'
   fileRoutesById: FileRoutesById
 }
@@ -131,10 +143,18 @@ export interface RootRouteChildren {
   JournalRoute: typeof JournalRoute
   PaiementsRoute: typeof PaiementsRoute
   ParametresRoute: typeof ParametresRoute
+  ParametresUtilisateurRoute: typeof ParametresUtilisateurRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/parametres-utilisateur': {
+      id: '/parametres-utilisateur'
+      path: '/parametres-utilisateur'
+      fullPath: '/parametres-utilisateur'
+      preLoaderRoute: typeof ParametresUtilisateurRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/parametres': {
       id: '/parametres'
       path: '/parametres'
@@ -213,6 +233,7 @@ const rootRouteChildren: RootRouteChildren = {
   JournalRoute: JournalRoute,
   PaiementsRoute: PaiementsRoute,
   ParametresRoute: ParametresRoute,
+  ParametresUtilisateurRoute: ParametresUtilisateurRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

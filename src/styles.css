@@ -181,7 +181,7 @@ button:disabled {
 .swb-date-picker input {
   flex: 1 1 auto;
   min-width: 0;
-  cursor: pointer;
+  cursor: text;
 }
 
 .payment-time-picker {
@@ -282,6 +282,7 @@ button:disabled {
   top: calc(100% + 6px);
   left: 0;
   z-index: 50;
+  pointer-events: auto;
   background: #fff;
   border: 1px solid rgba(15, 23, 42, 0.15);
   border-radius: 10px;
@@ -292,31 +293,49 @@ button:disabled {
   width: max(220px, 100%);
 }
 
+.swb-date-picker__panel.is-floating {
+  z-index: 100020;
+  pointer-events: auto;
+}
+
 .swb-date-picker__panel[hidden] {
   display: none;
 }
 
 .swb-date-picker__header {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  gap: 6px;
   margin-bottom: 8px;
 }
 
 .swb-date-picker__month {
-  flex: 1;
+  min-width: 0;
   text-align: center;
+  font-size: 13px;
   font-weight: 600;
+  line-height: 1.2;
   text-transform: capitalize;
+  white-space: nowrap;
   color: #0b1220;
+}
+
+.swb-date-picker__nav-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .swb-date-picker__nav {
   border: none;
   border-radius: 6px;
-  width: 32px;
-  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
   background: #f1f5f9;
   color: #0f172a;
   cursor: pointer;
@@ -326,6 +345,11 @@ button:disabled {
 .swb-date-picker__nav:hover {
   background: #e0e7ff;
   color: #312e81;
+}
+
+.swb-date-picker__nav-icon {
+  width: 16px;
+  height: 16px;
 }
 
 .swb-date-picker__weekdays {

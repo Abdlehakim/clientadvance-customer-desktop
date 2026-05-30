@@ -17,6 +17,7 @@ export {
   getActivityLogs, getNotifications,
   cleanupOldSentNotifications, clearSentNotifications,
   getEmployeeAccounts, createEmployeeAccount, updateEmployeeAccount, deleteEmployeeAccount,
+  changeCurrentEmployeePassword,
   MAX_EMPLOYEES, EMPLOYEE_LIMIT_REACHED_MESSAGE, getEmployeeCount, hasReachedEmployeeLimit,
   isAdmin, isEmployee, isSameLocalDay, filterForCurrentUserDailyScope,
   isOnline, setOnline, getLastSync, getPendingCount, syncPendingData,

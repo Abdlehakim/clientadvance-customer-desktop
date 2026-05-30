@@ -30,6 +30,7 @@ interface RemoteUser {
   id: string;
   name: string;
   email: string;
+  phone?: string;
   role: "admin" | "employe";
   is_active?: boolean;
   company_id?: string | null;
@@ -87,6 +88,10 @@ function readSessionMode() {
   return read<string | null>(KEYS.authSessionMode, null);
 }
 
+export function isRemoteAuthOfflineSession() {
+  return readSessionMode() === "offline" && !getAuthToken();
+}
+
 async function persistOfflineLoginArtifacts(
   user: User,
   password: string,
@@ -104,9 +109,29 @@ async function persistOfflineLoginArtifacts(
   }
 }
 
+export async function persistRemoteOfflineUserSession(user: User, password: string) {
+  clearAuthToken();
+  persistUser(user, "offline");
+  await persistOfflineLoginArtifacts(user, password, null, "offline");
+}
+
+function shouldTryLocalCredentialFallback(error: unknown) {
+  if (!(error instanceof ApiError)) {
+    return false;
+  }
+
+  return (
+    error.status === 0 ||
+    error.status === 400 ||
+    error.status === 401 ||
+    error.status >= 500
+  );
+}
+
 export const authRemoteRepository: AuthRepository = {
   async login(identifier, password) {
     const normalizedIdentifier = identifier.trim().toLowerCase();
+    let remoteError: unknown = null;
 
     if (isConnectionOnline()) {
       try {
@@ -126,15 +151,21 @@ export const authRemoteRepository: AuthRepository = {
         await persistOfflineLoginArtifacts(user, password, response.token, "online");
         return user;
       } catch (error) {
-        if (!(error instanceof ApiError) || error.status !== 0) {
+        if (!shouldTryLocalCredentialFallback(error)) {
           throw error;
         }
+
+        remoteError = error;
       }
     }
 
     const localResult = await authenticateOfflineCredential(normalizedIdentifier, password);
 
     if (localResult.status === "missing") {
+      if (remoteError instanceof ApiError && remoteError.status !== 0) {
+        throw remoteError;
+      }
+
       throw new Error(OFFLINE_LOGIN_UNAVAILABLE_MESSAGE);
     }
 
@@ -144,6 +175,14 @@ export const authRemoteRepository: AuthRepository = {
 
     if (localResult.status === "inactive") {
       throw new Error("Compte désactivé");
+    }
+
+    if (
+      remoteError instanceof ApiError &&
+      remoteError.status !== 0 &&
+      localResult.user.role !== "employe"
+    ) {
+      throw remoteError;
     }
 
     clearAuthToken();

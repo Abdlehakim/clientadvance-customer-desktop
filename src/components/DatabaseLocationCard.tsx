@@ -69,7 +69,9 @@ export function DatabaseLocationCard({
     setIsOpeningDatabaseLocation(true);
 
     try {
-      await openLocalDatabaseLocation();
+      const location = await openLocalDatabaseLocation();
+      setDatabaseLocation(location);
+      onLocationChange?.(location);
     } catch {
       toast.error("Impossible d'ouvrir l'emplacement de la base de données.");
     } finally {

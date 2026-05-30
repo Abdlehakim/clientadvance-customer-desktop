@@ -70,13 +70,13 @@ function LoginPage() {
 
         <form onSubmit={submit} className="space-y-4">
           <div className="space-y-1.5">
-            <Label htmlFor="email">Email ou identifiant</Label>
+            <Label htmlFor="email">Email ou téléphone</Label>
             <Input
               id="email"
               type="text"
               value={email}
               onChange={(event) => setEmail(event.target.value)}
-              placeholder="vous@exemple.com"
+              placeholder="Email ou numéro de téléphone"
               disabled={isSubmitting}
             />
           </div>

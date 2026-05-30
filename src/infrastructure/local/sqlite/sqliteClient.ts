@@ -138,7 +138,7 @@ export async function getDatabaseLocation() {
 }
 
 export async function openDatabaseLocation() {
-  return invokeTauriCommand<void>("open_database_location");
+  return invokeTauriCommand<SqliteDatabaseInfo>("open_database_location");
 }
 
 export async function chooseDatabaseFolder() {

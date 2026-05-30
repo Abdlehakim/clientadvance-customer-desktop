@@ -8,6 +8,7 @@
  * Manual sync switches to the backend sync API when backend auth is enabled.
  */
 import {
+  authenticateOfflineCredential,
   createLocalEmployeeAccount,
   deleteLocalEmployeeAccount,
   initializeOfflineAuthStorage,
@@ -42,7 +43,11 @@ import {
 import { sendDesktopEmail } from "@/infrastructure/local/sqlite/desktopEmailClient";
 import { getStoredSmtpPassword } from "@/infrastructure/local/smtpPasswordStorage";
 import { apiFetch, ApiError } from "@/infrastructure/remote/apiClient";
-import { authRemoteRepository } from "@/infrastructure/remote/authRemoteRepository";
+import {
+  authRemoteRepository,
+  isRemoteAuthOfflineSession,
+  persistRemoteOfflineUserSession,
+} from "@/infrastructure/remote/authRemoteRepository";
 import { userRemoteService } from "@/infrastructure/remote/userRemoteService";
 import { syncService as defaultSyncService } from "@/infrastructure/sync/syncService";
 import {
@@ -146,6 +151,7 @@ import type {
   EmployeeAccount,
   EmployeeAccountCreateInput,
   EmployeeAccountListResult,
+  EmployeePasswordChangeInput,
   EmployeeAccountUpdateInput,
   NotificationItem,
   User,
@@ -485,7 +491,7 @@ export async function openLocalDatabaseLocation() {
     throw new Error("Cette option est disponible uniquement dans l'application desktop.");
   }
 
-  await openSqliteDatabaseLocation();
+  return openSqliteDatabaseLocation();
 }
 
 export async function chooseLocalDatabaseFolder() {
@@ -658,9 +664,9 @@ function usesServerModeForEmployees() {
   return !useLocalAuth || getServerMode() === "with-server";
 }
 
-export const MAX_EMPLOYEES = 2;
+export const MAX_EMPLOYEES = 3;
 export const EMPLOYEE_LIMIT_REACHED_MESSAGE =
-  "Limite atteinte : vous pouvez créer au maximum 2 E-user.";
+  "Limite atteinte : vous pouvez créer au maximum 3 E-user.";
 
 export function getEmployeeCount(employees: Pick<EmployeeAccount, "role">[]) {
   return employees.filter((employee) => employee.role === "employe").length;
@@ -674,6 +680,24 @@ function assertCanCreateEmployee(employees: Pick<EmployeeAccount, "role">[]) {
   if (hasReachedEmployeeLimit(employees)) {
     throw new Error(EMPLOYEE_LIMIT_REACHED_MESSAGE);
   }
+}
+
+function mergeLocalEmployeeCacheFields(
+  employees: EmployeeAccount[],
+  localEmployees: EmployeeAccount[],
+) {
+  const localById = new Map(localEmployees.map((employee) => [employee.id, employee]));
+  const localByEmail = new Map(localEmployees.map((employee) => [employee.email, employee]));
+
+  return employees.map((employee) => {
+    const localEmployee = localById.get(employee.id) ?? localByEmail.get(employee.email);
+
+    return {
+      ...employee,
+      displayPassword: localEmployee?.displayPassword || employee.displayPassword,
+      phone: employee.phone || localEmployee?.phone || "",
+    };
+  });
 }
 
 export const getEmployeeAccounts = async (): Promise<EmployeeAccountListResult> => {
@@ -695,9 +719,10 @@ export const getEmployeeAccounts = async (): Promise<EmployeeAccountListResult> 
         }),
       ),
     );
+    const localEmployees = await listLocalEmployeeAccounts();
 
     return {
-      employees,
+      employees: mergeLocalEmployeeCacheFields(employees, localEmployees),
       source: "backend",
       serverUnavailable: false,
     };
@@ -732,14 +757,22 @@ export const createEmployeeAccount = async (
 
     const employee = await userRemoteService.create(input);
 
-    await upsertLocalEmployeeAccount(employee, {
+    const employeeForCache: EmployeeAccount = {
+      ...employee,
+      phone: employee.phone || input.phone || "",
+    };
+    const cachedEmployee = await upsertLocalEmployeeAccount(employeeForCache, {
       password: input.password,
       offline_enabled: true,
       sync_status: "synced",
       pending_sync: false,
     });
 
-    return employee;
+    return {
+      ...employeeForCache,
+      displayPassword: cachedEmployee.displayPassword,
+      phone: cachedEmployee.phone || employeeForCache.phone,
+    };
   } catch (error) {
     if (error instanceof ApiError && error.status === 0) {
       throw new Error("Impossible de créer l’E-user sur le serveur.");
@@ -763,17 +796,163 @@ export const updateEmployeeAccount = async (
 
   try {
     const employee = await userRemoteService.update(id, patch);
-    await upsertLocalEmployeeAccount(employee, {
+    const employeeForCache: EmployeeAccount = {
+      ...employee,
+      phone: employee.phone || (patch.phone !== undefined ? patch.phone : undefined),
+    };
+    const cachedEmployee = await upsertLocalEmployeeAccount(employeeForCache, {
       password: patch.password,
       offline_enabled: patch.password !== undefined ? true : undefined,
       sync_status: "synced",
       pending_sync: false,
     });
 
-    return employee;
+    return {
+      ...employeeForCache,
+      displayPassword: cachedEmployee.displayPassword,
+      phone: cachedEmployee.phone || employeeForCache.phone,
+    };
   } catch (error) {
     if (error instanceof ApiError && error.status === 0) {
       throw new Error("Impossible de mettre à jour l’E-user sur le serveur.");
+    }
+
+    throw error;
+  }
+};
+
+async function changeEmployeePasswordInLocalCredentialCache(
+  currentUser: User,
+  currentPassword: string,
+  newPassword: string,
+  options: { persistRemoteOfflineSession?: boolean } = {},
+) {
+  const verification = await authenticateOfflineCredential(currentUser.email, currentPassword);
+
+  if (verification.status !== "success" || verification.user.id !== currentUser.id) {
+    throw new Error("Mot de passe actuel incorrect.");
+  }
+
+  const employee = await updateStoredLocalEmployeeAccount(
+    currentUser.id,
+    { password: newPassword },
+    {
+      offline_enabled: true,
+      sync_status: "local",
+      pending_sync: false,
+    },
+  );
+
+  if (options.persistRemoteOfflineSession) {
+    await persistRemoteOfflineUserSession(
+      {
+        ...currentUser,
+        id: employee.id,
+        email: employee.email,
+        phone: employee.phone,
+        name: employee.name,
+        role: employee.role,
+        password: "",
+      },
+      newPassword,
+    );
+  }
+
+  return employee;
+}
+
+function isPasswordChangeAuthorizationError(error: ApiError) {
+  if (error.status === 401) {
+    return true;
+  }
+
+  if (error.status !== 403) {
+    return false;
+  }
+
+  const normalizedMessage = error.message
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+
+  return /^(forbidden|unauthorized|acces refuse)/.test(normalizedMessage);
+}
+
+export const changeCurrentEmployeePassword = async (
+  input: EmployeePasswordChangeInput & { confirmPassword?: string },
+): Promise<EmployeeAccount> => {
+  const currentUser = getCurrentUser();
+
+  if (!isEmployee(currentUser)) {
+    throw new Error("Accès refusé.");
+  }
+
+  const currentPassword = input.currentPassword;
+  const newPassword = input.newPassword.trim();
+  const confirmPassword = input.confirmPassword?.trim();
+
+  if (newPassword.length === 0) {
+    throw new Error("Le nouveau mot de passe est obligatoire.");
+  }
+
+  if (newPassword.length < 6) {
+    throw new Error("Le nouveau mot de passe doit contenir au moins 6 caractères.");
+  }
+
+  if (confirmPassword !== undefined && newPassword !== confirmPassword) {
+    throw new Error("Les mots de passe ne correspondent pas.");
+  }
+
+  if (!usesServerModeForEmployees() || isRemoteAuthOfflineSession()) {
+    return changeEmployeePasswordInLocalCredentialCache(
+      currentUser,
+      currentPassword,
+      newPassword,
+      { persistRemoteOfflineSession: !useLocalAuth },
+    );
+  }
+
+  try {
+    const employee = await userRemoteService.changeOwnPassword({
+      currentPassword,
+      newPassword,
+    });
+    const cachedEmployee = await upsertLocalEmployeeAccount(employee, {
+      password: newPassword,
+      offline_enabled: true,
+      sync_status: "synced",
+      pending_sync: false,
+    });
+
+    return {
+      ...employee,
+      displayPassword: cachedEmployee.displayPassword,
+      phone: employee.phone || cachedEmployee.phone,
+    };
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 0) {
+      throw new Error("Impossible de modifier le mot de passe sur le serveur.");
+    }
+
+    if (error instanceof ApiError && isPasswordChangeAuthorizationError(error)) {
+      try {
+        return await changeEmployeePasswordInLocalCredentialCache(
+          currentUser,
+          currentPassword,
+          newPassword,
+          { persistRemoteOfflineSession: true },
+        );
+      } catch (fallbackError) {
+        if (
+          fallbackError instanceof Error &&
+          fallbackError.message === "Mot de passe actuel incorrect."
+        ) {
+          throw fallbackError;
+        }
+
+        throw new Error("Vous n'êtes pas autorisé à effectuer cette action.");
+      }
     }
 
     throw error;

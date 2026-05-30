@@ -6,6 +6,8 @@ export interface Client extends Syncable {
   adresse: string;
   email: string;
   cin: string;
+  cinIssuedAt?: string;
+  birthDate?: string;
   created_at: string;
   updated_at: string;
   created_by: string;
