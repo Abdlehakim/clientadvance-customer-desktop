@@ -8,8 +8,8 @@ const outputPath = path.join(distDir, "index.html");
 const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
 
 const preferredEntry =
-  manifest["src/client.tsx"] && manifest["src/client.tsx"]?.isEntry
-    ? ["src/client.tsx", manifest["src/client.tsx"]]
+  manifest["src/main.tsx"] && manifest["src/main.tsx"]?.isEntry
+    ? ["src/main.tsx", manifest["src/main.tsx"]]
     : null;
 
 const entry = preferredEntry ?? Object.entries(manifest).find(
