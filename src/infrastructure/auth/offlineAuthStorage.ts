@@ -1,6 +1,7 @@
 import type {
   EmployeeAccount,
   EmployeeAccountCreateInput,
+  EmployeeSyncAction,
   EmployeeAccountUpdateInput,
   Role,
   User,
@@ -35,6 +36,7 @@ import {
 } from "./offlinePassword";
 
 type LocalUserSyncStatus = "local" | "synced";
+type LocalUserSyncAction = EmployeeSyncAction;
 
 interface OfflineAuthRecord {
   id: string;
@@ -57,6 +59,8 @@ interface OfflineAuthRecord {
   updated_at: string;
   sync_status: LocalUserSyncStatus;
   pending_sync: boolean;
+  sync_action: LocalUserSyncAction;
+  deleted_at: string | null;
 }
 
 interface OfflineAuthSqliteRow extends SqliteRow {
@@ -80,6 +84,8 @@ interface OfflineAuthSqliteRow extends SqliteRow {
   updated_at: unknown;
   sync_status: unknown;
   pending_sync: unknown;
+  sync_action: unknown;
+  deleted_at: unknown;
 }
 
 type OfflineAuthVerificationResult =
@@ -96,6 +102,7 @@ const DUPLICATE_EMPLOYEE_PHONE_MESSAGE =
 
 let initializationPromise: Promise<void> | null = null;
 let sqliteAuthSessionHydrated = false;
+let pendingLocalEmployeeSyncCount = 0;
 
 function usesSqliteCredentialStore() {
   return import.meta.env.VITE_STORAGE_DRIVER === "sqlite" && isTauriRuntime();
@@ -110,6 +117,10 @@ function normalizePhoneKey(value: string) {
   return /^\d{8}$/.test(localPhone) ? localPhone : "";
 }
 
+function normalizeNameKey(value: string) {
+  return value.trim().toLowerCase();
+}
+
 function resolveLoginIdentifier(identifier: string) {
   const trimmedIdentifier = identifier.trim();
 
@@ -120,9 +131,18 @@ function resolveLoginIdentifier(identifier: string) {
     };
   }
 
+  const phoneKey = normalizePhoneKey(trimmedIdentifier);
+
+  if (phoneKey) {
+    return {
+      type: "phone" as const,
+      value: phoneKey,
+    };
+  }
+
   return {
-    type: "phone" as const,
-    value: normalizePhoneKey(trimmedIdentifier),
+    type: "name" as const,
+    value: normalizeNameKey(trimmedIdentifier),
   };
 }
 
@@ -170,6 +190,18 @@ function readSyncStatus(value: unknown): LocalUserSyncStatus {
   return value === "synced" ? "synced" : "local";
 }
 
+function readSyncAction(value: unknown): LocalUserSyncAction {
+  return value === "create" || value === "update" || value === "delete" ? value : "none";
+}
+
+function isPendingEmployeeSyncRecord(record: OfflineAuthRecord) {
+  return (
+    record.role === "employe" &&
+    record.pending_sync === true &&
+    record.sync_action !== "none"
+  );
+}
+
 function toSessionUser(record: OfflineAuthRecord): User {
   return {
     id: record.id,
@@ -194,6 +226,10 @@ function toEmployeeAccount(record: OfflineAuthRecord): EmployeeAccount {
     updated_at: record.updated_at,
     displayPassword: record.display_password,
     phone: record.phone,
+    sync_status: record.sync_status,
+    pending_sync: record.pending_sync,
+    sync_action: record.sync_action,
+    deleted_at: record.deleted_at,
   };
 }
 
@@ -230,6 +266,8 @@ function normalizeLocalStorageRecord(
     updated_at: readString(value?.updated_at, now),
     sync_status: readSyncStatus(value?.sync_status),
     pending_sync: readBoolean(value?.pending_sync, false),
+    sync_action: readSyncAction(value?.sync_action),
+    deleted_at: readNullableString(value?.deleted_at),
   };
 }
 
@@ -262,6 +300,8 @@ function toOfflineAuthRecord(row: OfflineAuthSqliteRow): OfflineAuthRecord {
     updated_at: readString(row.updated_at),
     sync_status: readSyncStatus(row.sync_status),
     pending_sync: readBoolean(row.pending_sync, false),
+    sync_action: readSyncAction(row.sync_action),
+    deleted_at: readNullableString(row.deleted_at),
   };
 }
 
@@ -274,7 +314,9 @@ function readLocalStorageRecords() {
       (record, index) =>
         currentRecords[index]?.phone !== record.phone ||
         currentRecords[index]?.phone_normalized !== record.phone_normalized ||
-        currentRecords[index]?.display_password !== record.display_password,
+        currentRecords[index]?.display_password !== record.display_password ||
+        currentRecords[index]?.sync_action !== record.sync_action ||
+        currentRecords[index]?.deleted_at !== record.deleted_at,
     );
 
     if (shouldPersistNormalization) {
@@ -300,6 +342,7 @@ function readLocalStorageRecords() {
 function writeLocalStorageRecords(records: OfflineAuthRecord[]) {
   write(KEYS.localUsers, records);
   write(KEYS.offlineCredentials, records);
+  pendingLocalEmployeeSyncCount = records.filter(isPendingEmployeeSyncRecord).length;
 }
 
 function findSeededAdminRecord(records: OfflineAuthRecord[]) {
@@ -329,7 +372,9 @@ function areRecordsEquivalent(left: OfflineAuthRecord, right: OfflineAuthRecord)
     left.seeded === right.seeded &&
     left.last_online_login_at === right.last_online_login_at &&
     left.sync_status === right.sync_status &&
-    left.pending_sync === right.pending_sync
+    left.pending_sync === right.pending_sync &&
+    left.sync_action === right.sync_action &&
+    left.deleted_at === right.deleted_at
   );
 }
 
@@ -357,6 +402,9 @@ async function createRecord(
     phone?: string | null;
     createdAt?: string;
     updatedAt?: string;
+    syncAction?: LocalUserSyncAction;
+    deletedAt?: string | null;
+    preserveExistingId?: boolean;
   } = {},
 ) {
   const salt = options.existing?.password_salt ?? generateOfflinePasswordSalt();
@@ -390,7 +438,10 @@ async function createRecord(
   }
 
   return {
-    id: options.existing?.id ?? user.id,
+    id:
+      options.preserveExistingId === false
+        ? user.id
+        : options.existing?.id ?? user.id,
     email: normalizeEmail(user.email),
     name: user.name,
     role: user.role,
@@ -413,6 +464,11 @@ async function createRecord(
     updated_at: now,
     sync_status: options.syncStatus ?? options.existing?.sync_status ?? "local",
     pending_sync: options.pendingSync ?? options.existing?.pending_sync ?? false,
+    sync_action: options.syncAction ?? options.existing?.sync_action ?? "none",
+    deleted_at:
+      options.deletedAt !== undefined
+        ? options.deletedAt
+        : options.existing?.deleted_at ?? null,
   } satisfies OfflineAuthRecord;
 }
 
@@ -497,7 +553,9 @@ async function getSqliteOfflineAuthRecordByEmail(email: string) {
         created_at,
         updated_at,
         sync_status,
-        pending_sync
+        pending_sync,
+        sync_action,
+        deleted_at
       FROM local_users
       WHERE email = ?
       LIMIT 1
@@ -532,7 +590,9 @@ async function getSqliteOfflineAuthRecordById(id: string) {
         created_at,
         updated_at,
         sync_status,
-        pending_sync
+        pending_sync,
+        sync_action,
+        deleted_at
       FROM local_users
       WHERE id = ?
       LIMIT 1
@@ -567,7 +627,9 @@ async function listSqliteOfflineAuthRecords() {
         created_at,
         updated_at,
         sync_status,
-        pending_sync
+        pending_sync,
+        sync_action,
+        deleted_at
       FROM local_users
       ORDER BY created_at DESC
     `,
@@ -600,8 +662,10 @@ async function upsertSqliteOfflineAuthRecord(record: OfflineAuthRecord) {
         created_at,
         updated_at,
         sync_status,
-        pending_sync
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        pending_sync,
+        sync_action,
+        deleted_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(email) DO UPDATE SET
         id = excluded.id,
         name = excluded.name,
@@ -621,7 +685,9 @@ async function upsertSqliteOfflineAuthRecord(record: OfflineAuthRecord) {
         created_at = excluded.created_at,
         updated_at = excluded.updated_at,
         sync_status = excluded.sync_status,
-        pending_sync = excluded.pending_sync
+        pending_sync = excluded.pending_sync,
+        sync_action = excluded.sync_action,
+        deleted_at = excluded.deleted_at
     `,
     [
       record.id,
@@ -644,6 +710,8 @@ async function upsertSqliteOfflineAuthRecord(record: OfflineAuthRecord) {
       record.updated_at,
       record.sync_status,
       record.pending_sync ? 1 : 0,
+      record.sync_action,
+      record.deleted_at,
     ],
   );
 }
@@ -684,7 +752,9 @@ async function ensureSqliteDefaultAdminSeeded() {
         created_at,
         updated_at,
         sync_status,
-        pending_sync
+        pending_sync,
+        sync_action,
+        deleted_at
       FROM local_users
       WHERE seeded = 1
         AND role = 'admin'
@@ -766,6 +836,8 @@ async function ensureSqliteAuthSchema() {
   await addColumnIfMissing("display_password", "TEXT NOT NULL DEFAULT ''");
   await addColumnIfMissing("phone", "TEXT NOT NULL DEFAULT ''");
   await addColumnIfMissing("phone_normalized", "TEXT NOT NULL DEFAULT ''");
+  await addColumnIfMissing("sync_action", "TEXT NOT NULL DEFAULT 'none'");
+  await addColumnIfMissing("deleted_at", "TEXT");
 }
 
 async function backfillSqliteAuthPhoneKeys() {
@@ -824,7 +896,7 @@ async function getLocalStorageOfflineAuthRecordByPhone(phone: string) {
   return (
     readLocalStorageRecords().find(
       (record) =>
-        record.role === "employe" && record.phone_normalized === phoneKey,
+        record.role === "employe" && !record.deleted_at && record.phone_normalized === phoneKey,
     ) ?? null
   );
 }
@@ -849,6 +921,7 @@ async function deleteOfflineAuthRecordById(id: string) {
   if (usesSqliteCredentialStore()) {
     const db = await getDb();
     await db.execute("DELETE FROM local_users WHERE id = ? AND role = 'employe'", [id]);
+    await refreshPendingLocalEmployeeSyncCount();
     return;
   }
 
@@ -877,12 +950,27 @@ async function getOfflineAuthRecordByPhone(phone: string) {
     return (
       (await listSqliteOfflineAuthRecords()).find(
         (record) =>
-          record.role === "employe" && record.phone_normalized === phoneKey,
+          record.role === "employe" && !record.deleted_at && record.phone_normalized === phoneKey,
       ) ?? null
     );
   }
 
   return getLocalStorageOfflineAuthRecordByPhone(phone);
+}
+
+async function getOfflineAuthRecordByName(name: string) {
+  const nameKey = normalizeNameKey(name);
+
+  if (!nameKey) {
+    return null;
+  }
+
+  return (
+    (await listOfflineAuthRecords()).find(
+      (record) =>
+        record.role === "employe" && !record.deleted_at && normalizeNameKey(record.name) === nameKey,
+    ) ?? null
+  );
 }
 
 async function getOfflineAuthRecordByIdentifier(identifier: string) {
@@ -892,11 +980,11 @@ async function getOfflineAuthRecordByIdentifier(identifier: string) {
     return getOfflineAuthRecordByEmail(resolvedIdentifier.value);
   }
 
-  if (!resolvedIdentifier.value) {
-    return null;
+  if (resolvedIdentifier.type === "phone") {
+    return getOfflineAuthRecordByPhone(resolvedIdentifier.value);
   }
 
-  return getOfflineAuthRecordByPhone(resolvedIdentifier.value);
+  return getOfflineAuthRecordByName(resolvedIdentifier.value);
 }
 
 async function getOfflineAuthRecordById(id: string) {
@@ -915,9 +1003,16 @@ async function listOfflineAuthRecords() {
   return listLocalStorageOfflineAuthRecords();
 }
 
+async function refreshPendingLocalEmployeeSyncCount() {
+  pendingLocalEmployeeSyncCount = (await listOfflineAuthRecords()).filter(
+    isPendingEmployeeSyncRecord,
+  ).length;
+}
+
 async function upsertOfflineAuthRecord(record: OfflineAuthRecord) {
   if (usesSqliteCredentialStore()) {
     await upsertSqliteOfflineAuthRecord(record);
+    await refreshPendingLocalEmployeeSyncCount();
     return;
   }
 
@@ -934,6 +1029,7 @@ async function assertEmployeePhoneAvailable(phone: string, excludedId?: string) 
   const duplicate = (await listOfflineAuthRecords()).find(
     (record) =>
       record.role === "employe" &&
+      !record.deleted_at &&
       record.id !== excludedId &&
       record.phone_normalized === phoneKey,
   );
@@ -948,6 +1044,10 @@ async function verifyOfflineAuthRecord(
   password: string,
 ): Promise<OfflineAuthVerificationResult> {
   if (!record) {
+    return { status: "missing" };
+  }
+
+  if (record.deleted_at) {
     return { status: "missing" };
   }
 
@@ -991,10 +1091,12 @@ export async function initializeOfflineAuthStorage() {
         sqliteAuthSessionHydrated = true;
       }
 
+      await refreshPendingLocalEmployeeSyncCount();
       return;
     }
 
     await ensureLocalStorageDefaultAdminSeeded();
+    await refreshPendingLocalEmployeeSyncCount();
   })().finally(() => {
     initializationPromise = null;
   });
@@ -1046,7 +1148,7 @@ export async function listLocalEmployeeAccounts(): Promise<EmployeeAccount[]> {
   const records = await listOfflineAuthRecords();
 
   return records
-    .filter((record) => record.role === "employe")
+    .filter((record) => record.role === "employe" && !record.deleted_at)
     .sort((left, right) => right.created_at.localeCompare(left.created_at))
     .map(toEmployeeAccount);
 }
@@ -1057,6 +1159,7 @@ export async function resetLocalEmployeeAccounts() {
   if (usesSqliteCredentialStore()) {
     const db = await getDb();
     await db.execute("DELETE FROM local_users WHERE role = 'employe'");
+    await refreshPendingLocalEmployeeSyncCount();
   }
 
   if (isBrowser()) {
@@ -1076,6 +1179,50 @@ export async function deleteLocalEmployeeAccount(id: string) {
   await deleteOfflineAuthRecordById(id);
 }
 
+function isLocalOnlyEmployeeRecord(record: OfflineAuthRecord) {
+  return record.sync_action === "create" || !record.id.startsWith("usr_");
+}
+
+export async function markLocalEmployeeAccountDeleted(id: string) {
+  await initializeOfflineAuthStorage();
+  const existing = await getOfflineAuthRecordById(id);
+
+  if (!existing || existing.role !== "employe") {
+    throw new Error("Utilisateur local introuvable");
+  }
+
+  if (isLocalOnlyEmployeeRecord(existing)) {
+    await deleteOfflineAuthRecordById(id);
+    return { queued: false as const };
+  }
+
+  const deletedAt = new Date().toISOString();
+  const record = await createRecord(
+    {
+      id: existing.id,
+      email: existing.email,
+      name: existing.name,
+      phone: existing.phone,
+      role: existing.role,
+      company_id: existing.company_id,
+      company_name: existing.company_name,
+    },
+    {
+      existing,
+      isActive: false,
+      offlineEnabled: false,
+      syncStatus: "local",
+      pendingSync: true,
+      syncAction: "delete",
+      deletedAt,
+      updatedAt: deletedAt,
+    },
+  );
+
+  await upsertOfflineAuthRecord(record);
+  return { queued: true as const };
+}
+
 export async function createLocalEmployeeAccount(
   input: EmployeeAccountCreateInput,
   options: {
@@ -1085,6 +1232,7 @@ export async function createLocalEmployeeAccount(
     last_online_login_at?: string | null;
     sync_status?: LocalUserSyncStatus;
     pending_sync?: boolean;
+    sync_action?: LocalUserSyncAction;
     created_at?: string;
     updated_at?: string;
   } = {},
@@ -1119,6 +1267,9 @@ export async function createLocalEmployeeAccount(
     last_online_login_at: options.last_online_login_at ?? null,
     sync_status: options.sync_status ?? "local",
     pending_sync: options.pending_sync ?? false,
+    sync_action:
+      options.sync_action ??
+      (options.pending_sync ? "create" : "none"),
   });
 }
 
@@ -1130,6 +1281,9 @@ export async function upsertLocalEmployeeAccount(
     last_online_login_at?: string | null;
     sync_status?: LocalUserSyncStatus;
     pending_sync?: boolean;
+    sync_action?: LocalUserSyncAction;
+    deleted_at?: string | null;
+    preserve_existing_id?: boolean;
   } = {},
 ): Promise<EmployeeAccount> {
   await initializeOfflineAuthStorage();
@@ -1153,6 +1307,9 @@ export async function upsertLocalEmployeeAccount(
       lastOnlineLoginAt: options.last_online_login_at,
       syncStatus: options.sync_status,
       pendingSync: options.pending_sync,
+      syncAction: options.sync_action,
+      deletedAt: options.deleted_at,
+      preserveExistingId: options.preserve_existing_id,
       createdAt: employee.created_at,
       updatedAt: employee.updated_at,
     },
@@ -1170,6 +1327,7 @@ export async function updateLocalEmployeeAccount(
     last_online_login_at?: string | null;
     sync_status?: LocalUserSyncStatus;
     pending_sync?: boolean;
+    sync_action?: LocalUserSyncAction;
     updated_at?: string;
   } = {},
 ): Promise<EmployeeAccount> {
@@ -1208,6 +1366,71 @@ export async function updateLocalEmployeeAccount(
           : existing.last_online_login_at,
       sync_status: options.sync_status ?? existing.sync_status,
       pending_sync: options.pending_sync ?? existing.pending_sync,
+      sync_action:
+        options.sync_action ??
+        (options.pending_sync
+          ? existing.sync_action === "create"
+            ? "create"
+            : "update"
+          : existing.sync_action),
     },
   );
+}
+
+export function getPendingLocalEmployeeAccountSyncCount() {
+  if (!usesSqliteCredentialStore()) {
+    pendingLocalEmployeeSyncCount = readLocalStorageRecords().filter(
+      isPendingEmployeeSyncRecord,
+    ).length;
+  }
+
+  return pendingLocalEmployeeSyncCount;
+}
+
+export async function listPendingLocalEmployeeAccountSyncRecords() {
+  await initializeOfflineAuthStorage();
+  return (await listOfflineAuthRecords())
+    .filter(isPendingEmployeeSyncRecord)
+    .sort((left, right) => left.updated_at.localeCompare(right.updated_at))
+    .map(toEmployeeAccount);
+}
+
+export async function markLocalEmployeeAccountSynced(
+  localId: string,
+  employee: EmployeeAccount,
+  options: { password?: string } = {},
+) {
+  await initializeOfflineAuthStorage();
+  const existing =
+    (await getOfflineAuthRecordById(localId)) ??
+    (await getOfflineAuthRecordByEmail(employee.email));
+
+  const record = await createRecord(
+    {
+      id: employee.id,
+      email: employee.email,
+      name: employee.name,
+      phone: employee.phone,
+      role: employee.role,
+      company_id: existing?.company_id ?? null,
+      company_name: existing?.company_name ?? null,
+    },
+    {
+      existing,
+      password: options.password,
+      displayPassword: options.password ?? existing?.display_password ?? "",
+      isActive: employee.is_active,
+      offlineEnabled: true,
+      syncStatus: "synced",
+      pendingSync: false,
+      syncAction: "none",
+      deletedAt: null,
+      preserveExistingId: false,
+      createdAt: employee.created_at,
+      updatedAt: employee.updated_at,
+    },
+  );
+
+  await upsertOfflineAuthRecord(record);
+  return toEmployeeAccount(record);
 }

@@ -3,7 +3,7 @@ import { Clock } from "lucide-react";
 import { toast } from "sonner";
 import { schedulePaymentNotifications } from "@/services/notificationDeliveryScheduler";
 import { readNotificationDeliveryMode } from "@/infrastructure/local/adminSettingsState";
-import { createPayment, getAdminSettings, getClients } from "@/lib/data";
+import { createPayment, getAdminSettings, getPaymentSelectableClients } from "@/lib/data";
 import { DatePickerInput } from "@/components/DatePickerInput";
 import { Button } from "@/components/ui/button";
 import {
@@ -330,7 +330,7 @@ export function PaymentFormDialog({
   onOpenChange: (v: boolean) => void;
   presetClientId?: string;
 }) {
-  const clients = getClients();
+  const clients = getPaymentSelectableClients();
   const [clientId, setClientId] = useState("");
   const [montant, setMontant] = useState("");
   const [date, setDate] = useState("");
@@ -429,6 +429,12 @@ export function PaymentFormDialog({
                 ))}
               </SelectContent>
             </Select>
+            {clients.length === 0 ? (
+              <p className="text-xs text-muted-foreground">
+                Aucun client disponible. Veuillez ajouter ou synchroniser un client avant
+                d’enregistrer un paiement.
+              </p>
+            ) : null}
             {errors.clientId ? <p className="text-xs text-destructive">{errors.clientId}</p> : null}
           </div>
 

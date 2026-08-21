@@ -1,9 +1,9 @@
 /**
- * LocalStorage-backed primitives.
+ * Legacy localStorage primitives.
  *
- * Browser/dev mode still uses these keys as the primary data store.
- * In Tauri/SQLite mode, business data keys are used only as a temporary sync
- * bridge or browser-session projection and must not be treated as durable data.
+ * SQLite desktop storage is the only durable app data store. These keys remain
+ * only so old snapshots can be imported and non-durable browser events can be
+ * emitted during the transition.
  */
 export const KEYS = {
   clients: "gcp_clients",
@@ -89,44 +89,5 @@ export function clearLocalStorageKeys(
 export const uid = () => Math.random().toString(36).slice(2, 10);
 
 export function seedIfNeeded() {
-  if (!isBrowser()) return;
-  const hasSeedFlag = localStorage.getItem(KEYS.seeded) !== null;
-  const hasSeededSnapshot = [
-    KEYS.clients,
-    KEYS.payments,
-    KEYS.settings,
-    KEYS.logs,
-    KEYS.notifications,
-  ].every((key) => localStorage.getItem(key) !== null);
-
-  if (hasSeedFlag && hasSeededSnapshot) return;
-  const now = new Date().toISOString();
-  const settings = {
-    id: "settings_default",
-    admin_email: "",
-    admin_whatsapp: "",
-    notification_retention_days: 30,
-    setup_completed: false,
-    server_mode: "with-server",
-    notification_delivery_mode: "backend",
-    smtp_provider_type: "gmail",
-    smtp_host: "",
-    smtp_port: 587,
-    smtp_username: "",
-    smtp_password_configured: false,
-    smtp_secure: true,
-    smtp_from_email: "",
-    smtp_from_name: "",
-    updated_at: now,
-    updated_by: "",
-    remote_updated_at: now,
-    pending_sync: false,
-    sync_status: "synced",
-  };
-  localStorage.setItem(KEYS.clients, JSON.stringify([]));
-  localStorage.setItem(KEYS.payments, JSON.stringify([]));
-  localStorage.setItem(KEYS.settings, JSON.stringify(settings));
-  localStorage.setItem(KEYS.logs, JSON.stringify([]));
-  localStorage.setItem(KEYS.notifications, JSON.stringify([]));
-  localStorage.setItem(KEYS.seeded, "1");
+  return;
 }

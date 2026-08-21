@@ -221,7 +221,7 @@ function persistLocalStorageSettings(
   serverSettings: NormalizedServerAdminSettings,
   updatedAt: string,
 ) {
-  if (!isBrowser()) {
+  if (!isBrowser() || usesSqliteSettingsStore()) {
     return;
   }
 
@@ -342,7 +342,7 @@ async function persistSqliteSettings(
   serverSettings: NormalizedServerAdminSettings,
   updatedAt: string,
 ) {
-  if (import.meta.env.VITE_STORAGE_DRIVER !== "sqlite" || !isTauriRuntime()) {
+  if (!usesSqliteSettingsStore()) {
     return;
   }
 
@@ -423,6 +423,10 @@ async function persistSqliteSettings(
   );
 
   await reloadSqliteCache();
+}
+
+function usesSqliteSettingsStore() {
+  return import.meta.env.VITE_STORAGE_DRIVER === "sqlite" && isTauriRuntime();
 }
 
 export async function persistServerProvidedAdminSettings(

@@ -11,27 +11,21 @@ import {
   authenticateOfflineCredential,
   createLocalEmployeeAccount,
   deleteLocalEmployeeAccount,
+  getPendingLocalEmployeeAccountSyncCount,
   initializeOfflineAuthStorage,
+  listPendingLocalEmployeeAccountSyncRecords,
   listLocalEmployeeAccounts,
+  markLocalEmployeeAccountDeleted,
+  markLocalEmployeeAccountSynced,
   resetLocalEmployeeAccounts,
   updateLocalEmployeeAccount as updateStoredLocalEmployeeAccount,
   upsertLocalEmployeeAccount,
 } from "@/infrastructure/auth/offlineAuthStorage";
-import { authLocalRepository } from "@/infrastructure/local/authLocalRepository";
-import { clientLocalRepository } from "@/infrastructure/local/clientLocalRepository";
-import { paymentLocalRepository } from "@/infrastructure/local/paymentLocalRepository";
-import { adminSettingsLocalRepository } from "@/infrastructure/local/adminSettingsLocalRepository";
-import {
-  activityLogLocalRepository,
-  cleanupOldActivityLogs as cleanupLocalActivityLogs,
-} from "@/infrastructure/local/activityLogLocalRepository";
-import { notificationLocalRepository } from "@/infrastructure/local/notificationLocalRepository";
 import {
   BACKEND_SYNC_DISABLED_MESSAGE,
   isBackendSyncEnabled,
   normalizeSmtpPasswordForProvider,
   normalizeSmtpPasswordValue,
-  normalizeAdminSettings,
 } from "@/infrastructure/local/adminSettingsState";
 import {
   changeDatabaseLocation as changeSqliteDatabaseLocation,
@@ -49,20 +43,15 @@ import {
   persistRemoteOfflineUserSession,
 } from "@/infrastructure/remote/authRemoteRepository";
 import { userRemoteService } from "@/infrastructure/remote/userRemoteService";
-import { syncService as defaultSyncService } from "@/infrastructure/sync/syncService";
-import {
-  clearLocalStorageKeys,
-  KEYS,
-  seedIfNeeded as seedLocalStorageIfNeeded,
-  write,
-} from "@/infrastructure/local/localStorageDatabase";
 import {
   buildPaymentNotificationStatusMap,
   getPaymentNotificationStatuses as resolvePaymentNotificationStatuses,
 } from "@/services/paymentNotificationService";
 import { isConnectionOnline, setConnectionTestOverride } from "./connectionService";
 import {
+  cleanupLegacyLocalStorageData as cleanupSqliteLegacyLocalStorageData,
   createSqliteCachedSyncService,
+  getSqliteStorageDiagnostics,
   initializeSqliteCache,
   reloadSqliteCache,
   resetSqliteDevelopmentData,
@@ -74,57 +63,57 @@ import {
 } from "./sqliteCachedServices";
 
 const useLocalAuth = import.meta.env.VITE_USE_LOCAL_AUTH === "true";
-export type StorageDriver = "localStorage" | "sqlite";
-export const storageDriver: StorageDriver =
-  import.meta.env.VITE_STORAGE_DRIVER === "sqlite" ? "sqlite" : "localStorage";
-export const useSQLiteStorage = storageDriver === "sqlite" && isTauriRuntime();
+export type StorageDriver = "sqlite";
+export const storageDriver: StorageDriver = "sqlite";
+const configuredStorageDriver = import.meta.env.VITE_STORAGE_DRIVER;
+export const useSQLiteStorage = configuredStorageDriver === "sqlite" && isTauriRuntime();
+export const SQLITE_STORAGE_REQUIRED_MESSAGE =
+  "Stockage SQLite desktop requis. Lancez l'application Tauri avec VITE_STORAGE_DRIVER=sqlite.";
 
-export const authService = useLocalAuth ? authLocalRepository : authRemoteRepository;
-const sqliteSyncService = createSqliteCachedSyncService(defaultSyncService);
+export const authService = authRemoteRepository;
+const sqliteSyncService = createSqliteCachedSyncService({
+  getPendingCount: () => 0,
+  getLastSync: () => null,
+  syncPendingData: async () => ({ ok: false, synced: 0 }),
+  setOnlineMode: setConnectionTestOverride,
+  isOnlineMode: isConnectionOnline,
+});
 
-// Browser/dev mode stays on localStorage by default.
-// Desktop mode enables SQLite only when VITE_STORAGE_DRIVER=sqlite and the app runs inside Tauri.
-// The SQLite path uses an in-memory cache because the current React UI still reads data synchronously.
-export const clientService = useSQLiteStorage ? sqliteCachedClientService : clientLocalRepository;
-export const paymentService = useSQLiteStorage ? sqliteCachedPaymentService : paymentLocalRepository;
-export const adminSettingsService = useSQLiteStorage
-  ? sqliteCachedAdminSettingsService
-  : adminSettingsLocalRepository;
-export const activityLogService = useSQLiteStorage
-  ? sqliteCachedActivityLogService
-  : activityLogLocalRepository;
-export const notificationService = useSQLiteStorage
-  ? sqliteCachedNotificationService
-  : notificationLocalRepository;
-const baseSyncService = useSQLiteStorage ? sqliteSyncService : defaultSyncService;
+// SQLite is the only durable storage path. Browser/dev runs must fail loudly
+// instead of falling back to localStorage business data.
+export const clientService = sqliteCachedClientService;
+export const paymentService = sqliteCachedPaymentService;
+export const adminSettingsService = sqliteCachedAdminSettingsService;
+export const activityLogService = sqliteCachedActivityLogService;
+export const notificationService = sqliteCachedNotificationService;
+const baseSyncService = sqliteSyncService;
 
 export { formatTND, formatDateFR, formatDateTimeFR } from "@/lib/format";
 
 export function seedIfNeeded() {
-  if (useSQLiteStorage) {
-    return;
+  // SQLite is initialized asynchronously by initializeStorageDriver().
+}
+
+export function assertSqliteStorageAvailable() {
+  if (configuredStorageDriver !== "sqlite") {
+    throw new Error(SQLITE_STORAGE_REQUIRED_MESSAGE);
   }
 
-  seedLocalStorageIfNeeded();
+  if (!isTauriRuntime()) {
+    throw new Error(SQLITE_STORAGE_REQUIRED_MESSAGE);
+  }
 }
 
 let storageDriverInitializationPromise: Promise<true | null> | null = null;
 
 export async function initializeStorageDriver() {
   storageDriverInitializationPromise ??= (async () => {
+    assertSqliteStorageAvailable();
     await initializeOfflineAuthStorage();
-
-    if (!useSQLiteStorage) {
-      seedLocalStorageIfNeeded();
-      cleanupLocalActivityLogs();
-    }
-
-    if (useSQLiteStorage) {
-      await initializeSqliteCache();
-    }
+    await initializeSqliteCache();
 
     await cleanupSentNotificationsByRetention(true);
-    return useSQLiteStorage ? true : null;
+    return true;
   })().catch((error) => {
     storageDriverInitializationPromise = null;
     throw error;
@@ -157,7 +146,7 @@ import type {
   User,
   SmtpProviderType,
 } from "@/domain/types";
-import type { SyncRepository } from "@/domain/repositories";
+import type { SyncRepository, SyncResult } from "@/domain/repositories";
 
 const SMTP_TEST_SUBJECT = "Test SMTP - ClientAdvans";
 const SMTP_TEST_BODY = `Bonjour,
@@ -287,6 +276,7 @@ function getUnscopedPayments() {
 
 export const getAllClients = () => getUnscopedClients();
 export const getAllPayments = () => getUnscopedPayments();
+export const getPaymentSelectableClients = () => getUnscopedClients();
 export const getClients = () =>
   filterForCurrentUserDailyScope(
     getUnscopedClients(),
@@ -470,6 +460,36 @@ export async function testAdminSmtpEmail(input: SmtpTestInput) {
   }
 }
 
+export async function getStorageDiagnostics() {
+  if (!isAdmin(getCurrentUser())) {
+    throw new Error("AccÃ¨s refusÃ©. Cette section est rÃ©servÃ©e Ã  l'administrateur.");
+  }
+
+  assertSqliteStorageAvailable();
+  return getSqliteStorageDiagnostics();
+}
+
+export async function cleanupLegacyLocalStorageData() {
+  if (!isAdmin(getCurrentUser())) {
+    throw new Error("AccÃ¨s refusÃ©. Cette section est rÃ©servÃ©e Ã  l'administrateur.");
+  }
+
+  assertSqliteStorageAvailable();
+  const diagnostics = await getSqliteStorageDiagnostics();
+
+  if (
+    diagnostics.storageDriver !== "sqlite" ||
+    diagnostics.migrationStatus?.status !== "success" ||
+    !diagnostics.tableCounts
+  ) {
+    throw new Error(
+      "Nettoyage indisponible. La migration SQLite doit \u00eatre termin\u00e9e avec succ\u00e8s.",
+    );
+  }
+
+  return cleanupSqliteLegacyLocalStorageData();
+}
+
 export async function getLocalDatabaseLocation() {
   if (!isAdmin(getCurrentUser())) {
     throw new Error("Accès refusé. Cette section est réservée à l'administrateur.");
@@ -520,7 +540,7 @@ export async function changeLocalDatabaseLocation(
 
   const result = await changeSqliteDatabaseLocation(folderPath, replaceExisting);
 
-  if (!result.requiresConfirmation && useSQLiteStorage) {
+  if (!result.requiresConfirmation) {
     try {
       await reloadSqliteCache();
     } catch (error) {
@@ -529,26 +549,6 @@ export async function changeLocalDatabaseLocation(
   }
 
   return result;
-}
-
-function resetSettingsSyncStatus(settings: AdminSettings) {
-  return settings.server_mode === "without-server" ? "local" : "synced";
-}
-
-function resetLocalStorageBusinessData() {
-  const currentSettings = getAdminSettings();
-  const settings = normalizeAdminSettings({
-    ...currentSettings,
-    pending_sync: false,
-    sync_status: resetSettingsSyncStatus(currentSettings),
-  });
-
-  write(KEYS.clients, []);
-  write(KEYS.payments, []);
-  write(KEYS.logs, []);
-  write(KEYS.notifications, []);
-  write(KEYS.settings, settings);
-  clearLocalStorageKeys([KEYS.lastSync, KEYS.syncBridgeActive], { emit: true });
 }
 
 async function resetRemoteDevelopmentData() {
@@ -590,24 +590,40 @@ export async function resetDevelopmentTestData() {
 
   await resetLocalEmployeeAccounts();
 
-  if (useSQLiteStorage) {
-    await resetSqliteDevelopmentData();
-    return;
-  }
-
-  resetLocalStorageBusinessData();
+  await resetSqliteDevelopmentData();
 }
 
 export const syncService: SyncRepository = {
   getPendingCount() {
-    return isBackendSyncMode() ? baseSyncService.getPendingCount() : 0;
+    if (!isBackendSyncMode()) {
+      return 0;
+    }
+
+    const pendingEmployeeCount = usesServerModeForEmployees()
+      ? getPendingLocalEmployeeAccountSyncCount()
+      : 0;
+
+    return baseSyncService.getPendingCount() + pendingEmployeeCount;
   },
-  syncPendingData() {
+  async syncPendingData(): Promise<SyncResult> {
     if (!isBackendSyncMode()) {
       throw new Error(BACKEND_SYNC_DISABLED_MESSAGE);
     }
 
-    return baseSyncService.syncPendingData();
+    const result = await Promise.resolve(baseSyncService.syncPendingData());
+
+    if (!result.ok) {
+      return result;
+    }
+
+    const syncedEmployeeCount = usesServerModeForEmployees()
+      ? await syncPendingEmployeeAccounts()
+      : 0;
+
+    return {
+      ok: result.ok,
+      synced: result.synced + syncedEmployeeCount,
+    };
   },
   getLastSync() {
     return baseSyncService.getLastSync();
@@ -659,14 +675,12 @@ export async function clearSentNotifications() {
 }
 
 function usesServerModeForEmployees() {
-  // Remote auth requires employee credentials to exist on app-server even when
-  // business data sync/notifications are configured for without-server mode.
-  return !useLocalAuth || getServerMode() === "with-server";
+  return getServerMode() === "with-server";
 }
 
-export const MAX_EMPLOYEES = 3;
+export const MAX_EMPLOYEES = 4;
 export const EMPLOYEE_LIMIT_REACHED_MESSAGE =
-  "Limite atteinte : vous pouvez créer au maximum 3 E-user.";
+  "Limite atteinte : vous pouvez créer au maximum 4 E-user.";
 
 export function getEmployeeCount(employees: Pick<EmployeeAccount, "role">[]) {
   return employees.filter((employee) => employee.role === "employe").length;
@@ -676,10 +690,60 @@ export function hasReachedEmployeeLimit(employees: Pick<EmployeeAccount, "role">
   return getEmployeeCount(employees) >= MAX_EMPLOYEES;
 }
 
+type EmployeeLimitSubject = Pick<EmployeeAccount, "id" | "email" | "role">;
+
+function mergeEmployeeLimitSubjects(...employeeGroups: EmployeeLimitSubject[][]) {
+  const merged: EmployeeLimitSubject[] = [];
+  const seenIds = new Set<string>();
+  const seenEmails = new Set<string>();
+
+  for (const employee of employeeGroups.flat()) {
+    const id = employee.id.trim();
+    const email = employee.email.trim().toLowerCase();
+
+    if ((id && seenIds.has(id)) || (email && seenEmails.has(email))) {
+      continue;
+    }
+
+    merged.push(employee);
+
+    if (id) {
+      seenIds.add(id);
+    }
+
+    if (email) {
+      seenEmails.add(email);
+    }
+  }
+
+  return merged;
+}
+
 function assertCanCreateEmployee(employees: Pick<EmployeeAccount, "role">[]) {
   if (hasReachedEmployeeLimit(employees)) {
     throw new Error(EMPLOYEE_LIMIT_REACHED_MESSAGE);
   }
+}
+
+function isApiUnavailableError(error: unknown) {
+  return error instanceof ApiError && error.status === 0;
+}
+
+async function createEmployeeAccountLocally(
+  input: EmployeeAccountCreateInput,
+  knownEmployees: EmployeeLimitSubject[] = [],
+  options: { pendingSync?: boolean } = {},
+) {
+  assertCanCreateEmployee(
+    mergeEmployeeLimitSubjects(knownEmployees, await listLocalEmployeeAccounts()),
+  );
+
+  return createLocalEmployeeAccount(input, {
+    offline_enabled: true,
+    sync_status: "local",
+    pending_sync: options.pendingSync ?? false,
+    sync_action: options.pendingSync ? "create" : "none",
+  });
 }
 
 function mergeLocalEmployeeCacheFields(
@@ -687,15 +751,36 @@ function mergeLocalEmployeeCacheFields(
   localEmployees: EmployeeAccount[],
 ) {
   const localById = new Map(localEmployees.map((employee) => [employee.id, employee]));
-  const localByEmail = new Map(localEmployees.map((employee) => [employee.email, employee]));
+  const localByEmail = new Map(
+    localEmployees.map((employee) => [employee.email.trim().toLowerCase(), employee]),
+  );
 
   return employees.map((employee) => {
-    const localEmployee = localById.get(employee.id) ?? localByEmail.get(employee.email);
-
-    return {
+    const localEmployee =
+      localById.get(employee.id) ?? localByEmail.get(employee.email.trim().toLowerCase());
+    const usePendingLocalData =
+      localEmployee?.pending_sync === true && localEmployee.sync_action !== "delete";
+    const mergedEmployee = {
       ...employee,
       displayPassword: localEmployee?.displayPassword || employee.displayPassword,
       phone: employee.phone || localEmployee?.phone || "",
+      sync_status: localEmployee?.sync_status ?? employee.sync_status,
+      pending_sync: localEmployee?.pending_sync ?? employee.pending_sync,
+      sync_action: localEmployee?.sync_action ?? employee.sync_action,
+      deleted_at: localEmployee?.deleted_at ?? employee.deleted_at,
+    };
+
+    if (!usePendingLocalData) {
+      return mergedEmployee;
+    }
+
+    return {
+      ...mergedEmployee,
+      name: localEmployee.name,
+      phone: localEmployee.phone || "",
+      is_active: localEmployee.is_active,
+      updated_at: localEmployee.updated_at,
+      displayPassword: localEmployee?.displayPassword || employee.displayPassword,
     };
   });
 }
@@ -711,23 +796,68 @@ export const getEmployeeAccounts = async (): Promise<EmployeeAccountListResult> 
 
   try {
     const employees = await userRemoteService.list();
+    const pendingLocalEmployees = await listPendingLocalEmployeeAccountSyncRecords();
+    const pendingLocalById = new Map(
+      pendingLocalEmployees.map((employee) => [employee.id, employee]),
+    );
+    const pendingLocalByEmail = new Map(
+      pendingLocalEmployees.map((employee) => [employee.email.trim().toLowerCase(), employee]),
+    );
+
     await Promise.all(
-      employees.map((employee) =>
-        upsertLocalEmployeeAccount(employee, {
+      employees.map((employee) => {
+        const pendingLocalEmployee =
+          pendingLocalById.get(employee.id) ??
+          pendingLocalByEmail.get(employee.email.trim().toLowerCase());
+
+        if (pendingLocalEmployee) {
+          return Promise.resolve();
+        }
+
+        return upsertLocalEmployeeAccount(employee, {
           sync_status: "synced",
           pending_sync: false,
-        }),
-      ),
+          sync_action: "none",
+        });
+      }),
     );
     const localEmployees = await listLocalEmployeeAccounts();
+    const pendingDeleteIds = new Set(
+      pendingLocalEmployees
+        .filter((employee) => employee.sync_action === "delete")
+        .map((employee) => employee.id),
+    );
+    const pendingDeleteEmails = new Set(
+      pendingLocalEmployees
+        .filter((employee) => employee.sync_action === "delete")
+        .map((employee) => employee.email.trim().toLowerCase()),
+    );
+    const visibleRemoteEmployees = employees.filter(
+      (employee) =>
+        !pendingDeleteIds.has(employee.id) &&
+        !pendingDeleteEmails.has(employee.email.trim().toLowerCase()),
+    );
+    const visibleRemoteIds = new Set(visibleRemoteEmployees.map((employee) => employee.id));
+    const visibleRemoteEmails = new Set(
+      visibleRemoteEmployees.map((employee) => employee.email.trim().toLowerCase()),
+    );
+    const localOnlyEmployees = localEmployees.filter(
+      (employee) =>
+        employee.pending_sync === true &&
+        !visibleRemoteIds.has(employee.id) &&
+        !visibleRemoteEmails.has(employee.email.trim().toLowerCase()),
+    );
 
     return {
-      employees: mergeLocalEmployeeCacheFields(employees, localEmployees),
+      employees: [
+        ...localOnlyEmployees,
+        ...mergeLocalEmployeeCacheFields(visibleRemoteEmployees, localEmployees),
+      ],
       source: "backend",
       serverUnavailable: false,
     };
   } catch (error) {
-    if (error instanceof ApiError && error.status === 0) {
+    if (isApiUnavailableError(error)) {
       return {
         employees: await listLocalEmployeeAccounts(),
         source: "local",
@@ -743,17 +873,16 @@ export const createEmployeeAccount = async (
   input: EmployeeAccountCreateInput,
 ): Promise<EmployeeAccount> => {
   if (!usesServerModeForEmployees()) {
-    assertCanCreateEmployee(await listLocalEmployeeAccounts());
-
-    return createLocalEmployeeAccount(input, {
-      offline_enabled: true,
-      sync_status: "local",
-      pending_sync: false,
-    });
+    return createEmployeeAccountLocally(input);
   }
 
+  let remoteEmployees: EmployeeAccount[] = [];
+
   try {
-    assertCanCreateEmployee(await userRemoteService.list());
+    remoteEmployees = await userRemoteService.list();
+    assertCanCreateEmployee(
+      mergeEmployeeLimitSubjects(remoteEmployees, await listLocalEmployeeAccounts()),
+    );
 
     const employee = await userRemoteService.create(input);
 
@@ -766,16 +895,19 @@ export const createEmployeeAccount = async (
       offline_enabled: true,
       sync_status: "synced",
       pending_sync: false,
+      sync_action: "none",
     });
 
     return {
       ...employeeForCache,
       displayPassword: cachedEmployee.displayPassword,
       phone: cachedEmployee.phone || employeeForCache.phone,
+      sync_status: cachedEmployee.sync_status,
+      pending_sync: cachedEmployee.pending_sync,
     };
   } catch (error) {
-    if (error instanceof ApiError && error.status === 0) {
-      throw new Error("Impossible de créer l’E-user sur le serveur.");
+    if (isApiUnavailableError(error)) {
+      return createEmployeeAccountLocally(input, remoteEmployees, { pendingSync: true });
     }
 
     throw error;
@@ -791,6 +923,7 @@ export const updateEmployeeAccount = async (
       offline_enabled: patch.password !== undefined ? true : undefined,
       sync_status: "local",
       pending_sync: false,
+      sync_action: "none",
     });
   }
 
@@ -805,21 +938,136 @@ export const updateEmployeeAccount = async (
       offline_enabled: patch.password !== undefined ? true : undefined,
       sync_status: "synced",
       pending_sync: false,
+      sync_action: "none",
     });
 
     return {
       ...employeeForCache,
       displayPassword: cachedEmployee.displayPassword,
       phone: cachedEmployee.phone || employeeForCache.phone,
+      sync_status: cachedEmployee.sync_status,
+      pending_sync: cachedEmployee.pending_sync,
+      sync_action: cachedEmployee.sync_action,
     };
   } catch (error) {
-    if (error instanceof ApiError && error.status === 0) {
-      throw new Error("Impossible de mettre à jour l’E-user sur le serveur.");
+    if (isApiUnavailableError(error)) {
+      return updateStoredLocalEmployeeAccount(id, patch, {
+        offline_enabled: patch.password !== undefined ? true : undefined,
+        sync_status: "local",
+        pending_sync: true,
+      });
     }
 
     throw error;
   }
 };
+
+function getEmployeeSyncPassword(employee: EmployeeAccount) {
+  return employee.displayPassword && employee.displayPassword.length > 0
+    ? employee.displayPassword
+    : null;
+}
+
+function buildEmployeeSyncUpdatePatch(employee: EmployeeAccount): EmployeeAccountUpdateInput {
+  const patch: EmployeeAccountUpdateInput = {
+    name: employee.name,
+    phone: employee.phone ?? "",
+    is_active: employee.is_active,
+  };
+  const password = getEmployeeSyncPassword(employee);
+
+  if (password) {
+    patch.password = password;
+  }
+
+  return patch;
+}
+
+async function syncPendingEmployeeAccount(employee: EmployeeAccount) {
+  switch (employee.sync_action) {
+    case "create": {
+      const password = getEmployeeSyncPassword(employee);
+
+      if (!password) {
+        throw new Error("Synchronisation E-user impossible. Mot de passe local indisponible.");
+      }
+
+      let createdEmployee = await userRemoteService.create({
+        name: employee.name,
+        email: employee.email,
+        phone: employee.phone ?? "",
+        password,
+        role: "employe",
+      });
+
+      if (employee.is_active === false) {
+        createdEmployee = await userRemoteService.update(createdEmployee.id, {
+          is_active: false,
+        });
+      }
+
+      await markLocalEmployeeAccountSynced(
+        employee.id,
+        {
+          ...createdEmployee,
+          phone: createdEmployee.phone || employee.phone || "",
+        },
+        { password },
+      );
+      return 1;
+    }
+
+    case "update": {
+      const patch = buildEmployeeSyncUpdatePatch(employee);
+      const updatedEmployee = await userRemoteService.update(employee.id, patch);
+
+      await markLocalEmployeeAccountSynced(
+        employee.id,
+        {
+          ...updatedEmployee,
+          phone: updatedEmployee.phone || employee.phone || "",
+        },
+        { password: patch.password },
+      );
+      return 1;
+    }
+
+    case "delete": {
+      try {
+        await userRemoteService.delete(employee.id);
+      } catch (error) {
+        if (!(error instanceof ApiError && error.status === 404)) {
+          throw error;
+        }
+      }
+
+      await deleteLocalEmployeeAccount(employee.id);
+      return 1;
+    }
+
+    default:
+      return 0;
+  }
+}
+
+async function syncPendingEmployeeAccounts() {
+  const pendingEmployees = await listPendingLocalEmployeeAccountSyncRecords();
+  let syncedCount = 0;
+
+  for (const employee of pendingEmployees) {
+    try {
+      syncedCount += await syncPendingEmployeeAccount(employee);
+    } catch (error) {
+      if (isApiUnavailableError(error)) {
+        throw new Error("Synchronisation E-user impossible. Serveur indisponible.");
+      }
+
+      throw error;
+    }
+  }
+
+  return syncedCount;
+}
 
 async function changeEmployeePasswordInLocalCredentialCache(
   currentUser: User,
@@ -959,7 +1207,12 @@ export const changeCurrentEmployeePassword = async (
   }
 };
 
-export const deleteEmployeeAccount = async (id: string): Promise<void> => {
+type EmployeeAccountDeleteResult = {
+  localFallback: boolean;
+  queuedSync: boolean;
+};
+
+export const deleteEmployeeAccount = async (id: string): Promise<EmployeeAccountDeleteResult> => {
   const currentUser = getCurrentUser();
 
   if (!isAdmin(currentUser)) {
@@ -972,7 +1225,7 @@ export const deleteEmployeeAccount = async (id: string): Promise<void> => {
 
   if (!usesServerModeForEmployees()) {
     await deleteLocalEmployeeAccount(id);
-    return;
+    return { localFallback: false, queuedSync: false };
   }
 
   try {
@@ -984,9 +1237,12 @@ export const deleteEmployeeAccount = async (id: string): Promise<void> => {
       // The backend is authoritative in server mode; the local credential cache
       // may not contain the employee yet.
     }
+
+    return { localFallback: false, queuedSync: false };
   } catch (error) {
-    if (error instanceof ApiError && error.status === 0) {
-      throw new Error("Impossible de supprimer l’E-user sur le serveur.");
+    if (isApiUnavailableError(error)) {
+      const localDelete = await markLocalEmployeeAccountDeleted(id);
+      return { localFallback: true, queuedSync: localDelete.queued };
     }
 
     throw error;

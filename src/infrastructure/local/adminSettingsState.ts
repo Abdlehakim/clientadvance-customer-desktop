@@ -72,9 +72,7 @@ export function readNotificationDeliveryMode(
   value: unknown,
   serverMode?: unknown,
 ): NotificationDeliveryMode {
-  return getNotificationDeliveryModeForServerMode(
-    readServerMode(serverMode, value),
-  );
+  return getNotificationDeliveryModeForServerMode(readServerMode(serverMode, value));
 }
 
 export function isBackendSyncEnabledForServerMode(serverMode: ServerMode) {
@@ -175,10 +173,7 @@ export function normalizeAdminSettings(
   value: Partial<AdminSettings> | null | undefined,
 ): AdminSettings {
   const fallback = createAdminSettingsFallback();
-  const serverMode = readServerMode(
-    value?.server_mode,
-    value?.notification_delivery_mode,
-  );
+  const serverMode = readServerMode(value?.server_mode, value?.notification_delivery_mode);
   const smtpPasswordConfigured = readBoolean(
     value?.smtp_password_configured,
     normalizeSmtpPasswordValue(value?.smtp_password).length > 0,
@@ -194,10 +189,7 @@ export function normalizeAdminSettings(
     notification_retention_days: Math.max(
       1,
       Math.trunc(
-        readNumber(
-          value?.notification_retention_days,
-          fallback.notification_retention_days,
-        ),
+        readNumber(value?.notification_retention_days, fallback.notification_retention_days),
       ),
     ),
     setup_completed: setupCompleted,
@@ -264,9 +256,7 @@ export function applyAdminSettingsUpdate(
     id: "settings_default",
     updated_at: meta.updatedAt,
     updated_by: meta.updatedBy,
-    remote_updated_at: syncableChanged
-      ? meta.updatedAt
-      : current.remote_updated_at,
+    remote_updated_at: syncableChanged ? meta.updatedAt : current.remote_updated_at,
     pending_sync: syncableChanged ? true : current.pending_sync,
     sync_status: syncableChanged ? "pending" : current.sync_status,
     smtp_password_configured: meta.smtpPasswordConfigured,

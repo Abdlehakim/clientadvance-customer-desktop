@@ -11,6 +11,7 @@ import type {
   Payment,
   PaymentCreateInput,
 } from "@/domain/types";
+import { ensureDefaultAdminUser } from "@/infrastructure/auth/seedDefaultAdmin";
 import type {
   ActivityLogRepository,
   AdminSettingsRepository,
@@ -33,17 +34,17 @@ import {
 import { notificationSQLiteRepository } from "@/infrastructure/local/sqlite/notificationSQLiteRepository";
 import { paymentSQLiteRepository } from "@/infrastructure/local/sqlite/paymentSQLiteRepository";
 import {
+  backupDatabase,
   getDb,
   initializeSqliteDatabase,
   resetSqliteInitialization,
+  type SqliteDatabaseBackupInfo,
   type SqliteRow,
 } from "@/infrastructure/local/sqlite/sqliteClient";
 import {
-  clearLocalStorageKeys,
   emitChange,
   isBrowser,
   KEYS,
-  SYNC_BRIDGE_KEYS,
 } from "@/infrastructure/local/localStorageDatabase";
 import { filterActivityLogsByRetention } from "@/services/activityLogRetention";
 
@@ -73,7 +74,21 @@ const cache: SqliteCacheState = {
   lastSync: null,
 };
 
-const SQLITE_SYNC_BRIDGE_KEYS = [...SYNC_BRIDGE_KEYS, KEYS.syncBridgeActive] as const;
+const LOCAL_STORAGE_MIGRATION_STATUS_KEY = "local_storage_migration_status";
+const SQLITE_BACKEND_SYNC_UNAVAILABLE_MESSAGE =
+  "Synchronisation backend indisponible en mode SQLite tant que la synchronisation native SQLite n'est pas active.";
+
+export const LEGACY_BUSINESS_LOCAL_STORAGE_KEYS = [
+  KEYS.clients,
+  KEYS.payments,
+  KEYS.settings,
+  KEYS.logs,
+  KEYS.notifications,
+  KEYS.localUsers,
+  KEYS.offlineCredentials,
+  KEYS.smtpPassword,
+  KEYS.licenseState,
+] as const;
 
 interface ClientRow extends SqliteRow {
   id: unknown;
@@ -159,7 +174,105 @@ interface NotificationRow extends SqliteRow {
 }
 
 interface AppStateRow extends SqliteRow {
+  key?: unknown;
   value: unknown;
+}
+
+interface TableCountRow extends SqliteRow {
+  count: unknown;
+}
+
+interface LegacyLocalUserRecord {
+  id?: unknown;
+  email?: unknown;
+  name?: unknown;
+  role?: unknown;
+  company_id?: unknown;
+  company_name?: unknown;
+  is_active?: unknown;
+  offline_enabled?: unknown;
+  password_hash?: unknown;
+  password_salt?: unknown;
+  password_iterations?: unknown;
+  display_password?: unknown;
+  phone?: unknown;
+  phone_normalized?: unknown;
+  seeded?: unknown;
+  last_online_login_at?: unknown;
+  created_at?: unknown;
+  updated_at?: unknown;
+  sync_status?: unknown;
+  pending_sync?: unknown;
+  sync_action?: unknown;
+  deleted_at?: unknown;
+}
+
+interface LegacyLicenseState {
+  id?: unknown;
+  license_key_hash?: unknown;
+  licenseKeyHash?: unknown;
+  license_token?: unknown;
+  licenseToken?: unknown;
+  device_id?: unknown;
+  deviceId?: unknown;
+  license_status?: unknown;
+  licenseStatus?: unknown;
+  company_id?: unknown;
+  companyId?: unknown;
+  company_name?: unknown;
+  companyName?: unknown;
+  customer_name?: unknown;
+  customerName?: unknown;
+  activated_at?: unknown;
+  activatedAt?: unknown;
+  expires_at?: unknown;
+  expiresAt?: unknown;
+  last_checked_at?: unknown;
+  lastCheckedAt?: unknown;
+  last_validated_at?: unknown;
+  lastValidatedAt?: unknown;
+  created_at?: unknown;
+  createdAt?: unknown;
+  updated_at?: unknown;
+  updatedAt?: unknown;
+}
+
+interface LocalStorageMigrationSnapshot {
+  clients: Client[];
+  payments: Payment[];
+  settings: AdminSettings | null;
+  logs: ActivityLog[];
+  notifications: NotificationItem[];
+  localUsers: LegacyLocalUserRecord[];
+  licenseState: LegacyLicenseState | null;
+  smtpPassword: string | null;
+  lastSync: string | null;
+}
+
+export interface LocalStorageMigrationStatus {
+  status: "skipped" | "success" | "failed";
+  migratedAt: string;
+  backupPath: string | null;
+  counts: {
+    clients: number;
+    payments: number;
+    settings: number;
+    activityLogs: number;
+    notifications: number;
+    localUsers: number;
+    licenseState: number;
+    smtpPassword: number;
+    lastSync: number;
+  };
+  error?: string;
+}
+
+export interface StorageDiagnostics {
+  storageDriver: "sqlite";
+  tableCounts: Record<string, number>;
+  localStorageBusinessDataDetected: boolean;
+  localStorageBusinessDataKeys: string[];
+  migrationStatus: LocalStorageMigrationStatus | null;
 }
 
 function readString(value: unknown, fallback = "") {
@@ -535,8 +648,9 @@ export async function initializeSqliteCache() {
 
   cache.initializePromise ??= (async () => {
     await initializeSqliteDatabase();
+    await importLocalStorageSnapshotToSqlite();
+    await ensureDefaultAdminUser();
     await hydrateCacheFromSqlite();
-    clearSqliteSyncBridge();
     emitChange();
   })().finally(() => {
     cache.initializePromise = null;
@@ -554,10 +668,6 @@ export async function reloadSqliteCache() {
 
 function emitCacheChange() {
   emitChange();
-}
-
-function clearSqliteSyncBridge() {
-  clearLocalStorageKeys(SQLITE_SYNC_BRIDGE_KEYS);
 }
 
 function resetSettingsSyncStatus(settings: AdminSettings) {
@@ -596,45 +706,179 @@ function localStorageLastSync() {
   }
 }
 
-function hasActiveSyncBridge() {
-  return isBrowser() && localStorage.getItem(KEYS.syncBridgeActive) === "1";
+function readOptionalString(value: unknown) {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
-function writeSyncBridgeSnapshot() {
+function readRecordValue(record: Partial<Record<string, unknown>>, ...keys: string[]) {
+  for (const key of keys) {
+    const value = record[key];
+
+    if (value !== undefined) {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
+function isNonEmptyArrayKey(key: string) {
+  return localStorageJson<unknown[]>(key, []).length > 0;
+}
+
+function hasCustomizedSettings() {
+  const settings = localStorageJson<Partial<AdminSettings> | null>(KEYS.settings, null);
+
+  if (!settings) {
+    return false;
+  }
+
+  return Boolean(
+    settings.setup_completed ||
+      readOptionalString(settings.admin_email) ||
+      readOptionalString(settings.admin_whatsapp) ||
+      readOptionalString(settings.smtp_host) ||
+      readOptionalString(settings.smtp_username) ||
+      readOptionalString(settings.smtp_from_email) ||
+      settings.pending_sync === true ||
+      settings.sync_status === "pending" ||
+      settings.sync_status === "failed",
+  );
+}
+
+function hasLegacyLocalStorageValue(key: string) {
+  if (!isBrowser() || localStorage.getItem(key) === null) {
+    return false;
+  }
+
+  if (
+    key === KEYS.clients ||
+    key === KEYS.payments ||
+    key === KEYS.logs ||
+    key === KEYS.notifications ||
+    key === KEYS.localUsers ||
+    key === KEYS.offlineCredentials
+  ) {
+    return isNonEmptyArrayKey(key);
+  }
+
+  if (key === KEYS.settings) {
+    return hasCustomizedSettings();
+  }
+
+  if (key === KEYS.lastSync) {
+    return localStorageLastSync() !== null;
+  }
+
+  if (key === KEYS.smtpPassword) {
+    return readOptionalString(localStorageJson<unknown>(key, null)) !== null;
+  }
+
+  if (key === KEYS.licenseState) {
+    const licenseState = localStorageJson<Record<string, unknown> | null>(key, null);
+    return licenseState !== null && Object.keys(licenseState).length > 0;
+  }
+
+  return false;
+}
+
+function getLegacyLocalStorageDataKeys() {
   if (!isBrowser()) {
-    return;
+    return [];
   }
 
-  localStorage.setItem(KEYS.syncBridgeActive, "1");
-  localStorage.setItem(KEYS.clients, JSON.stringify(cache.clients));
-  localStorage.setItem(KEYS.payments, JSON.stringify(cache.payments));
-  localStorage.setItem(KEYS.settings, JSON.stringify(cache.settings));
-  localStorage.setItem(KEYS.logs, JSON.stringify(cache.logs));
-  localStorage.setItem(KEYS.notifications, JSON.stringify(cache.notifications));
-
-  if (cache.lastSync) {
-    localStorage.setItem(KEYS.lastSync, JSON.stringify(cache.lastSync));
-  } else {
-    localStorage.removeItem(KEYS.lastSync);
-  }
+  return LEGACY_BUSINESS_LOCAL_STORAGE_KEYS.filter(hasLegacyLocalStorageValue);
 }
 
-function readLocalStorageSnapshot() {
-  if (!hasActiveSyncBridge()) {
-    return null;
+function readLocalStorageMigrationSnapshot(): LocalStorageMigrationSnapshot {
+  const localUsers = localStorageJson<LegacyLocalUserRecord[]>(KEYS.localUsers, []);
+  const legacyOfflineUsers = localStorageJson<LegacyLocalUserRecord[]>(
+    KEYS.offlineCredentials,
+    [],
+  );
+  const usersByEmail = new Map<string, LegacyLocalUserRecord>();
+
+  for (const user of [...legacyOfflineUsers, ...localUsers]) {
+    const email = readString(user.email).trim().toLowerCase();
+
+    if (email) {
+      usersByEmail.set(email, user);
+    }
   }
 
   return {
     clients: localStorageJson<Client[]>(KEYS.clients, []),
     payments: localStorageJson<Payment[]>(KEYS.payments, []),
-    settings: normalizeAdminSettings(localStorageJson<AdminSettings>(KEYS.settings, emptySettings())),
+    settings: isBrowser() && localStorage.getItem(KEYS.settings) !== null
+      ? normalizeAdminSettings(localStorageJson<AdminSettings>(KEYS.settings, emptySettings()))
+      : null,
     logs: localStorageJson<ActivityLog[]>(KEYS.logs, []),
     notifications: localStorageJson<NotificationItem[]>(KEYS.notifications, []),
+    localUsers: Array.from(usersByEmail.values()),
+    licenseState: localStorageJson<LegacyLicenseState | null>(KEYS.licenseState, null),
+    smtpPassword: readOptionalString(localStorageJson<unknown>(KEYS.smtpPassword, null)),
     lastSync: localStorageLastSync(),
   };
 }
 
-async function replaceClients(clients: Client[]) {
+function getMigrationCounts(snapshot: LocalStorageMigrationSnapshot) {
+  return {
+    clients: snapshot.clients.length,
+    payments: snapshot.payments.length,
+    settings: snapshot.settings ? 1 : 0,
+    activityLogs: snapshot.logs.length,
+    notifications: snapshot.notifications.length,
+    localUsers: snapshot.localUsers.length,
+    licenseState: snapshot.licenseState ? 1 : 0,
+    smtpPassword: snapshot.smtpPassword ? 1 : 0,
+    lastSync: snapshot.lastSync ? 1 : 0,
+  };
+}
+
+function hasMigrationData(snapshot: LocalStorageMigrationSnapshot) {
+  const counts = getMigrationCounts(snapshot);
+  return Object.values(counts).some((count) => count > 0);
+}
+
+async function writeMigrationStatus(status: LocalStorageMigrationStatus) {
+  const db = await getDb();
+  await db.execute(
+    `
+      INSERT INTO app_state (key, value, updated_at)
+      VALUES (?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(key) DO UPDATE SET
+        value = excluded.value,
+        updated_at = CURRENT_TIMESTAMP
+    `,
+    [LOCAL_STORAGE_MIGRATION_STATUS_KEY, JSON.stringify(status)],
+  );
+}
+
+async function readMigrationStatus() {
+  const db = await getDb();
+  const rows = await db.query<AppStateRow>(
+    `
+      SELECT value
+      FROM app_state
+      WHERE key = ?
+      LIMIT 1
+    `,
+    [LOCAL_STORAGE_MIGRATION_STATUS_KEY],
+  );
+  const serialized = readNullableString(rows[0]?.value);
+
+  if (!serialized) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(serialized) as LocalStorageMigrationStatus;
+  } catch {
+    return null;
+  }
+}
+
+async function upsertClients(clients: Client[]) {
   const db = await getDb();
 
   for (const client of clients) {
@@ -658,6 +902,22 @@ async function replaceClients(clients: Client[]) {
           pending_sync,
           sync_status
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          nom_complet = excluded.nom_complet,
+          telephone = excluded.telephone,
+          adresse = excluded.adresse,
+          email = excluded.email,
+          cin = excluded.cin,
+          cin_issued_at = excluded.cin_issued_at,
+          birth_date = excluded.birth_date,
+          created_at = excluded.created_at,
+          updated_at = excluded.updated_at,
+          created_by = excluded.created_by,
+          updated_by = excluded.updated_by,
+          deleted_at = excluded.deleted_at,
+          remote_updated_at = excluded.remote_updated_at,
+          pending_sync = excluded.pending_sync,
+          sync_status = excluded.sync_status
       `,
       [
         client.id,
@@ -681,7 +941,7 @@ async function replaceClients(clients: Client[]) {
   }
 }
 
-async function replacePayments(payments: Payment[]) {
+async function upsertPayments(payments: Payment[]) {
   const db = await getDb();
 
   for (const payment of payments) {
@@ -699,6 +959,16 @@ async function replacePayments(payments: Payment[]) {
           pending_sync,
           sync_status
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          client_id = excluded.client_id,
+          montant = excluded.montant,
+          date_paiement = excluded.date_paiement,
+          heure_paiement = excluded.heure_paiement,
+          created_by = excluded.created_by,
+          created_at = excluded.created_at,
+          remote_updated_at = excluded.remote_updated_at,
+          pending_sync = excluded.pending_sync,
+          sync_status = excluded.sync_status
       `,
       [
         payment.id,
@@ -716,7 +986,7 @@ async function replacePayments(payments: Payment[]) {
   }
 }
 
-async function replaceSettings(settings: AdminSettings) {
+async function upsertSettings(settings: AdminSettings) {
   const db = await getDb();
   await db.execute(
     `
@@ -742,6 +1012,26 @@ async function replaceSettings(settings: AdminSettings) {
         pending_sync,
         sync_status
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        admin_email = excluded.admin_email,
+        admin_whatsapp = excluded.admin_whatsapp,
+        notification_retention_days = excluded.notification_retention_days,
+        setup_completed = excluded.setup_completed,
+        server_mode = excluded.server_mode,
+        notification_delivery_mode = excluded.notification_delivery_mode,
+        smtp_provider_type = excluded.smtp_provider_type,
+        smtp_host = excluded.smtp_host,
+        smtp_port = excluded.smtp_port,
+        smtp_username = excluded.smtp_username,
+        smtp_password_configured = excluded.smtp_password_configured,
+        smtp_secure = excluded.smtp_secure,
+        smtp_from_email = excluded.smtp_from_email,
+        smtp_from_name = excluded.smtp_from_name,
+        updated_at = excluded.updated_at,
+        updated_by = excluded.updated_by,
+        remote_updated_at = excluded.remote_updated_at,
+        pending_sync = excluded.pending_sync,
+        sync_status = excluded.sync_status
     `,
     [
       settings.id,
@@ -768,7 +1058,7 @@ async function replaceSettings(settings: AdminSettings) {
   );
 }
 
-async function replaceLogs(logs: ActivityLog[]) {
+async function upsertLogs(logs: ActivityLog[]) {
   const db = await getDb();
 
   for (const log of filterActivityLogsByRetention(logs)) {
@@ -786,6 +1076,16 @@ async function replaceLogs(logs: ActivityLog[]) {
           pending_sync,
           sync_status
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          user_id = excluded.user_id,
+          user_name = excluded.user_name,
+          action_type = excluded.action_type,
+          description = excluded.description,
+          entity_type = excluded.entity_type,
+          entity_id = excluded.entity_id,
+          created_at = excluded.created_at,
+          pending_sync = excluded.pending_sync,
+          sync_status = excluded.sync_status
       `,
       [
         log.id,
@@ -803,7 +1103,7 @@ async function replaceLogs(logs: ActivityLog[]) {
   }
 }
 
-async function replaceNotifications(notifications: NotificationItem[]) {
+async function upsertNotifications(notifications: NotificationItem[]) {
   const db = await getDb();
 
   for (const notification of notifications) {
@@ -823,6 +1123,18 @@ async function replaceNotifications(notifications: NotificationItem[]) {
           pending_sync,
           sync_status
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          type = excluded.type,
+          recipient = excluded.recipient,
+          subject = excluded.subject,
+          body = excluded.body,
+          payment_id = excluded.payment_id,
+          status = excluded.status,
+          error_message = excluded.error_message,
+          created_at = excluded.created_at,
+          sent_at = excluded.sent_at,
+          pending_sync = excluded.pending_sync,
+          sync_status = excluded.sync_status
       `,
       [
         notification.id,
@@ -856,31 +1168,288 @@ async function writeLastSync(lastSync: string | null) {
   );
 }
 
-async function clearSnapshotTables() {
-  const db = await getDb();
-  await db.execute("DELETE FROM payments");
-  await db.execute("DELETE FROM notification_queue");
-  await db.execute("DELETE FROM activity_logs");
-  await db.execute("DELETE FROM admin_settings");
-  await db.execute("DELETE FROM clients");
-}
+function normalizeLegacyUser(record: LegacyLocalUserRecord) {
+  const now = new Date().toISOString();
+  const id = readString(record.id).trim();
+  const email = readString(record.email).trim().toLowerCase();
+  const name = readString(record.name).trim();
 
-async function persistLocalStorageSnapshotToSqlite() {
-  const snapshot = readLocalStorageSnapshot();
-
-  if (!snapshot) {
-    return false;
+  if (!id || !email || !name) {
+    return null;
   }
 
-  await clearSnapshotTables();
-  await replaceClients(snapshot.clients);
-  await replacePayments(snapshot.payments);
-  await replaceSettings(snapshot.settings);
-  await replaceLogs(snapshot.logs);
-  await replaceNotifications(snapshot.notifications);
-  await writeLastSync(snapshot.lastSync);
-  await hydrateCacheFromSqlite();
-  return true;
+  const passwordHash = readString(record.password_hash);
+  const role = readString(record.role) === "employe" ? "employe" : "admin";
+  const syncStatus = readString(record.sync_status) === "synced" ? "synced" : "local";
+  const syncAction = ["create", "update", "delete"].includes(readString(record.sync_action))
+    ? readString(record.sync_action)
+    : "none";
+
+  return {
+    id,
+    email,
+    name,
+    role,
+    company_id: readNullableString(record.company_id),
+    company_name: readNullableString(record.company_name),
+    is_active: readBoolean(record.is_active, true),
+    offline_enabled: readBoolean(record.offline_enabled, passwordHash.length > 0),
+    password_hash: passwordHash,
+    password_salt: readString(record.password_salt),
+    password_iterations: Math.max(1, Math.trunc(readNumber(record.password_iterations, 120000))),
+    display_password: readString(record.display_password),
+    phone: readString(record.phone),
+    phone_normalized: readString(record.phone_normalized),
+    seeded: readBoolean(record.seeded, false),
+    last_online_login_at: readNullableString(record.last_online_login_at),
+    created_at: readString(record.created_at, now),
+    updated_at: readString(record.updated_at, now),
+    sync_status: syncStatus,
+    pending_sync: readBoolean(record.pending_sync, false),
+    sync_action: syncAction,
+    deleted_at: readNullableString(record.deleted_at),
+  };
+}
+
+async function upsertLocalUsers(records: LegacyLocalUserRecord[]) {
+  const db = await getDb();
+
+  for (const record of records) {
+    const user = normalizeLegacyUser(record);
+
+    if (!user) {
+      continue;
+    }
+
+    await db.execute(
+      `
+        INSERT INTO local_users (
+          id,
+          email,
+          name,
+          role,
+          company_id,
+          company_name,
+          is_active,
+          offline_enabled,
+          password_hash,
+          password_salt,
+          password_iterations,
+          display_password,
+          phone,
+          phone_normalized,
+          seeded,
+          last_online_login_at,
+          created_at,
+          updated_at,
+          sync_status,
+          pending_sync,
+          sync_action,
+          deleted_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(email) DO UPDATE SET
+          id = excluded.id,
+          name = excluded.name,
+          role = excluded.role,
+          company_id = excluded.company_id,
+          company_name = excluded.company_name,
+          is_active = excluded.is_active,
+          offline_enabled = excluded.offline_enabled,
+          password_hash = excluded.password_hash,
+          password_salt = excluded.password_salt,
+          password_iterations = excluded.password_iterations,
+          display_password = excluded.display_password,
+          phone = excluded.phone,
+          phone_normalized = excluded.phone_normalized,
+          seeded = excluded.seeded,
+          last_online_login_at = excluded.last_online_login_at,
+          created_at = excluded.created_at,
+          updated_at = excluded.updated_at,
+          sync_status = excluded.sync_status,
+          pending_sync = excluded.pending_sync,
+          sync_action = excluded.sync_action,
+          deleted_at = excluded.deleted_at
+      `,
+      [
+        user.id,
+        user.email,
+        user.name,
+        user.role,
+        user.company_id,
+        user.company_name,
+        user.is_active ? 1 : 0,
+        user.offline_enabled ? 1 : 0,
+        user.password_hash,
+        user.password_salt,
+        user.password_iterations,
+        user.display_password,
+        user.phone,
+        user.phone_normalized,
+        user.seeded ? 1 : 0,
+        user.last_online_login_at,
+        user.created_at,
+        user.updated_at,
+        user.sync_status,
+        user.pending_sync ? 1 : 0,
+        user.sync_action,
+        user.deleted_at,
+      ],
+    );
+  }
+}
+
+function normalizeLicenseStatus(value: unknown) {
+  return value === "active" ||
+    value === "expired" ||
+    value === "revoked" ||
+    value === "suspended"
+    ? value
+    : "invalid";
+}
+
+function readLicenseValue(record: LegacyLicenseState, ...keys: string[]) {
+  return readRecordValue(record as Partial<Record<string, unknown>>, ...keys);
+}
+
+async function upsertLicenseState(record: LegacyLicenseState | null) {
+  if (!record) {
+    return;
+  }
+
+  const now = new Date().toISOString();
+  const db = await getDb();
+  await db.execute(
+    `
+      INSERT INTO license_state (
+        id,
+        license_key_hash,
+        license_token,
+        device_id,
+        license_status,
+        company_id,
+        company_name,
+        customer_name,
+        activated_at,
+        expires_at,
+        last_checked_at,
+        last_validated_at,
+        created_at,
+        updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        license_key_hash = excluded.license_key_hash,
+        license_token = excluded.license_token,
+        device_id = excluded.device_id,
+        license_status = excluded.license_status,
+        company_id = excluded.company_id,
+        company_name = excluded.company_name,
+        customer_name = excluded.customer_name,
+        activated_at = excluded.activated_at,
+        expires_at = excluded.expires_at,
+        last_checked_at = excluded.last_checked_at,
+        last_validated_at = excluded.last_validated_at,
+        created_at = excluded.created_at,
+        updated_at = excluded.updated_at
+    `,
+    [
+      readString(readLicenseValue(record, "id"), "primary"),
+      readString(readLicenseValue(record, "license_key_hash", "licenseKeyHash")),
+      readString(readLicenseValue(record, "license_token", "licenseToken")),
+      readString(readLicenseValue(record, "device_id", "deviceId")),
+      normalizeLicenseStatus(readLicenseValue(record, "license_status", "licenseStatus")),
+      readNullableString(readLicenseValue(record, "company_id", "companyId")),
+      readNullableString(readLicenseValue(record, "company_name", "companyName")),
+      readNullableString(readLicenseValue(record, "customer_name", "customerName")),
+      readString(readLicenseValue(record, "activated_at", "activatedAt"), now),
+      readNullableString(readLicenseValue(record, "expires_at", "expiresAt")),
+      readNullableString(readLicenseValue(record, "last_checked_at", "lastCheckedAt")),
+      readNullableString(readLicenseValue(record, "last_validated_at", "lastValidatedAt")),
+      readString(readLicenseValue(record, "created_at", "createdAt"), now),
+      readString(readLicenseValue(record, "updated_at", "updatedAt"), now),
+    ],
+  );
+}
+
+async function writeAppStateValue(key: string, value: string | null) {
+  const db = await getDb();
+  await db.execute(
+    `
+      INSERT INTO app_state (key, value, updated_at)
+      VALUES (?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(key) DO UPDATE SET
+        value = excluded.value,
+        updated_at = CURRENT_TIMESTAMP
+    `,
+    [key, value],
+  );
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error && error.message.trim().length > 0
+    ? error.message
+    : "Erreur inconnue";
+}
+
+async function importLocalStorageSnapshotToSqlite() {
+  const existingStatus = await readMigrationStatus();
+
+  if (existingStatus?.status === "success") {
+    return;
+  }
+
+  const snapshot = readLocalStorageMigrationSnapshot();
+
+  if (!hasMigrationData(snapshot)) {
+    await writeMigrationStatus({
+      status: "skipped",
+      migratedAt: new Date().toISOString(),
+      backupPath: null,
+      counts: getMigrationCounts(snapshot),
+    });
+    return;
+  }
+
+  let backup: SqliteDatabaseBackupInfo | null = null;
+  const counts = getMigrationCounts(snapshot);
+
+  try {
+    backup = await backupDatabase();
+    await upsertClients(snapshot.clients);
+    await upsertPayments(snapshot.payments);
+
+    if (snapshot.settings) {
+      await upsertSettings(snapshot.settings);
+    }
+
+    await upsertLogs(snapshot.logs);
+    await upsertNotifications(snapshot.notifications);
+    await upsertLocalUsers(snapshot.localUsers);
+    await upsertLicenseState(snapshot.licenseState);
+
+    if (snapshot.smtpPassword) {
+      await writeAppStateValue("smtp_password", snapshot.smtpPassword);
+    }
+
+    if (snapshot.lastSync) {
+      await writeLastSync(snapshot.lastSync);
+    }
+
+    await writeMigrationStatus({
+      status: "success",
+      migratedAt: new Date().toISOString(),
+      backupPath: backup.path,
+      counts,
+    });
+  } catch (error) {
+    await writeMigrationStatus({
+      status: "failed",
+      migratedAt: new Date().toISOString(),
+      backupPath: backup?.path ?? null,
+      counts,
+      error: errorMessage(error),
+    });
+    throw error;
+  }
 }
 
 export async function resetSqliteDevelopmentData() {
@@ -906,8 +1475,58 @@ export async function resetSqliteDevelopmentData() {
   );
 
   await hydrateCacheFromSqlite();
-  clearSqliteSyncBridge();
   emitCacheChange();
+}
+
+async function getTableCount(tableName: string) {
+  const db = await getDb();
+  const rows = await db.query<TableCountRow>(`SELECT COUNT(*) AS count FROM ${tableName}`);
+  return readNumber(rows[0]?.count, 0);
+}
+
+export async function getSqliteStorageDiagnostics(): Promise<StorageDiagnostics> {
+  await initializeSqliteCache();
+
+  const tableNames = [
+    "clients",
+    "payments",
+    "admin_settings",
+    "activity_logs",
+    "notification_queue",
+    "local_users",
+    "license_state",
+    "app_state",
+  ];
+  const counts = await Promise.all(tableNames.map((tableName) => getTableCount(tableName)));
+  const tableCounts = Object.fromEntries(
+    tableNames.map((tableName, index) => [tableName, counts[index]]),
+  );
+  const localStorageBusinessDataKeys = getLegacyLocalStorageDataKeys();
+
+  return {
+    storageDriver: "sqlite",
+    tableCounts,
+    localStorageBusinessDataDetected: localStorageBusinessDataKeys.length > 0,
+    localStorageBusinessDataKeys,
+    migrationStatus: await readMigrationStatus(),
+  };
+}
+
+export async function cleanupLegacyLocalStorageData() {
+  await initializeSqliteCache();
+
+  if (!isBrowser()) {
+    return [] as string[];
+  }
+
+  const removedKeys = getLegacyLocalStorageDataKeys();
+
+  for (const key of LEGACY_BUSINESS_LOCAL_STORAGE_KEYS) {
+    localStorage.removeItem(key);
+  }
+
+  emitChange();
+  return removedKeys;
 }
 
 export const sqliteCachedClientService: ClientRepository = {
@@ -1043,33 +1662,7 @@ export function createSqliteCachedSyncService(syncDelegate: SyncRepository): Syn
     },
     async syncPendingData(): Promise<SyncResult> {
       await initializeSqliteCache();
-      writeSyncBridgeSnapshot();
-
-      let result: SyncResult | null = null;
-      let syncError: unknown = null;
-
-      try {
-        result = await Promise.resolve(syncDelegate.syncPendingData());
-      } catch (error) {
-        syncError = error;
-      }
-
-      try {
-        const appliedBridgeSnapshot = await persistLocalStorageSnapshotToSqlite();
-
-        if (!appliedBridgeSnapshot) {
-          await hydrateCacheFromSqlite();
-        }
-      } finally {
-        clearSqliteSyncBridge();
-        emitCacheChange();
-      }
-
-      if (syncError) {
-        throw syncError;
-      }
-
-      return result ?? { ok: false, synced: 0 };
+      throw new Error(SQLITE_BACKEND_SYNC_UNAVAILABLE_MESSAGE);
     },
   };
 }

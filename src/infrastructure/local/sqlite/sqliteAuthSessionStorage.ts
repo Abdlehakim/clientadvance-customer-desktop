@@ -1,5 +1,4 @@
 import type { User } from "@/domain/types";
-import { KEYS, emitChange, isBrowser } from "@/infrastructure/local/localStorageDatabase";
 import {
   clearAuthToken,
   setAuthToken,
@@ -54,7 +53,7 @@ export async function persistSqliteAuthSession(params: {
 }
 
 export async function hydrateSqliteAuthSession() {
-  if (!canUseSqliteAuthSessionStorage() || !isBrowser()) {
+  if (!canUseSqliteAuthSessionStorage()) {
     return;
   }
 
@@ -88,20 +87,8 @@ export async function hydrateSqliteAuthSession() {
   } else {
     clearAuthToken();
   }
-
-  if (serializedUser) {
-    localStorage.setItem(KEYS.user, serializedUser);
-  } else {
-    localStorage.removeItem(KEYS.user);
-  }
-
-  if (mode) {
-    localStorage.setItem(KEYS.authSessionMode, JSON.stringify(mode));
-  } else {
-    localStorage.removeItem(KEYS.authSessionMode);
-  }
-
-  emitChange();
+  void serializedUser;
+  void mode;
 }
 
 export async function clearSqliteAuthSession() {

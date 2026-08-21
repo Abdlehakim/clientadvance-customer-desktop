@@ -210,20 +210,27 @@ function EmployeeManagementPage() {
     setSubmitting(true);
 
     try {
-      await createEmployeeAccount({
+      const createdEmployee = await createEmployeeAccount({
         name: name.trim(),
         email: email.trim(),
         phone: phone.trim().length > 0 ? normalizeTunisianPhone(phone) : "",
         password,
         role: "employe",
       });
+      const createdLocallyWhileServerUnavailable =
+        serverMode === "with-server" && createdEmployee.sync_status === "local";
+      let createSuccessMessage = "Compte E-user créé avec succès";
+
+      if (serverMode === "without-server") {
+        createSuccessMessage = "Compte E-user créé localement avec succès";
+      } else if (createdLocallyWhileServerUnavailable) {
+        createSuccessMessage =
+          "Compte E-user cr\u00e9\u00e9 localement. Serveur indisponible : il ne sera pas synchronis\u00e9 tant que le serveur n'est pas disponible.";
+      }
+
       setCreateDialogOpen(false);
       resetForm();
-      toast.success(
-        serverMode === "without-server"
-          ? "Compte E-user créé localement avec succès"
-          : "Compte E-user créé avec succès",
-      );
+      toast.success(createSuccessMessage);
       await refreshEmployees();
     } catch (error) {
       toast.error(getErrorMessage(error));
@@ -236,10 +243,17 @@ function EmployeeManagementPage() {
     setBusyUserId(employee.id);
 
     try {
-      await updateEmployeeAccount(employee.id, {
+      const updatedEmployee = await updateEmployeeAccount(employee.id, {
         is_active: !employee.is_active,
       });
-      toast.success(employee.is_active ? "Compte E-user désactivé." : "Compte E-user activé.");
+      const actionLabel = employee.is_active ? "d\u00e9sactiv\u00e9" : "activ\u00e9";
+      const updatedLocally = serverMode === "with-server" && updatedEmployee.pending_sync === true;
+
+      toast.success(
+        updatedLocally
+          ? `Compte E-user ${actionLabel} localement. Serveur indisponible : la modification sera synchronis\u00e9e plus tard.`
+          : `Compte E-user ${actionLabel}.`,
+      );
       await refreshEmployees();
     } catch (error) {
       toast.error(getErrorMessage(error));
@@ -256,10 +270,14 @@ function EmployeeManagementPage() {
     setBusyUserId(passwordTarget.id);
 
     try {
-      await updateEmployeeAccount(passwordTarget.id, {
+      const updatedEmployee = await updateEmployeeAccount(passwordTarget.id, {
         password: nextPassword,
       });
-      toast.success("Mot de passe E-user mis à jour.");
+      toast.success(
+        serverMode === "with-server" && updatedEmployee.pending_sync === true
+          ? "Mot de passe E-user mis \u00e0 jour localement. Serveur indisponible : la modification sera synchronis\u00e9e plus tard."
+          : "Mot de passe E-user mis \u00e0 jour.",
+      );
       setPasswordTarget(null);
       setNextPassword("");
       await refreshEmployees();
@@ -284,8 +302,14 @@ function EmployeeManagementPage() {
     setBusyUserId(employeeToDelete.id);
 
     try {
-      await deleteEmployeeAccount(employeeToDelete.id);
-      toast.success("E-user supprimé.");
+      const deleteResult = await deleteEmployeeAccount(employeeToDelete.id);
+      toast.success(
+        deleteResult.localFallback
+          ? deleteResult.queuedSync
+            ? "E-user supprim\u00e9 localement. Serveur indisponible : la suppression sera synchronis\u00e9e plus tard."
+            : "E-user supprim\u00e9 localement."
+          : "E-user supprim\u00e9.",
+      );
       setEmployeeToDelete(null);
       await refreshEmployees();
     } catch {

@@ -1,35 +1,28 @@
 import type { AuthRepository } from "@/domain/repositories";
 import type { User } from "@/domain/types";
-import {
-  createDefaultAdminUser,
-  isDemoAdminEnabled,
-} from "@/infrastructure/auth/defaultAdmin";
+import { createDefaultAdminUser, isDemoAdminEnabled } from "@/infrastructure/auth/defaultAdmin";
 import {
   OFFLINE_LOGIN_UNAVAILABLE_MESSAGE,
   authenticateOfflineCredential,
   initializeOfflineAuthStorage,
 } from "@/infrastructure/auth/offlineAuthStorage";
+import {
+  getCurrentUserSession,
+  setCurrentUserSession,
+} from "@/infrastructure/auth/currentUserSession";
+import {
+  clearSqliteAuthSession,
+  persistSqliteAuthSession,
+} from "@/infrastructure/local/sqlite/sqliteAuthSessionStorage";
 import { clearAuthToken } from "@/infrastructure/remote/apiClient";
-import { clearSqliteAuthSession, persistSqliteAuthSession } from "@/infrastructure/local/sqlite/sqliteAuthSessionStorage";
-import { KEYS, emitChange, isBrowser, read, write } from "./localStorageDatabase";
+import { emitChange } from "./localStorageDatabase";
 import { activityLogLocalRepository } from "./activityLogLocalRepository";
 
 const DEMO_USERS: User[] = isDemoAdminEnabled() ? [createDefaultAdminUser()] : [];
 
 function persistUser(user: User | null) {
-  if (!isBrowser()) {
-    return;
-  }
-
-  if (!user) {
-    localStorage.removeItem(KEYS.user);
-    localStorage.removeItem(KEYS.authSessionMode);
-    emitChange();
-    return;
-  }
-
-  write(KEYS.user, user);
-  write(KEYS.authSessionMode, "local");
+  setCurrentUserSession(user, user ? "local" : null);
+  emitChange();
 }
 
 export const authLocalRepository: AuthRepository = {
@@ -50,9 +43,16 @@ export const authLocalRepository: AuthRepository = {
     }
 
     const user = result.user;
+
     clearAuthToken();
     persistUser(user);
-    void persistSqliteAuthSession({ token: null, user, mode: "local" });
+
+    await persistSqliteAuthSession({
+      token: null,
+      user,
+      mode: "local",
+    });
+
     activityLogLocalRepository.create({
       user_id: user.id,
       user_name: user.name,
@@ -61,19 +61,23 @@ export const authLocalRepository: AuthRepository = {
       entity_type: "user",
       entity_id: user.id,
     });
+
     return user;
   },
-  logout() {
+
+  async logout() {
     clearAuthToken();
-    void clearSqliteAuthSession();
-    if (isBrowser()) {
-      localStorage.removeItem(KEYS.user);
-      localStorage.removeItem(KEYS.authSessionMode);
+    persistUser(null);
+
+    try {
+      await clearSqliteAuthSession();
+    } catch (error) {
+      console.error("Failed to clear SQLite auth session.", error);
     }
-    emitChange();
   },
+
   getCurrentUser() {
-    return read<User | null>(KEYS.user, null);
+    return getCurrentUserSession();
   },
 };
 

@@ -6,25 +6,20 @@ import {
   persistOfflineCredential,
 } from "@/infrastructure/auth/offlineAuthStorage";
 import {
+  getCurrentSessionMode,
+  getCurrentUserSession,
+  setCurrentUserSession,
+} from "@/infrastructure/auth/currentUserSession";
+import {
   clearSqliteAuthSession,
   persistSqliteAuthSession,
 } from "@/infrastructure/local/sqlite/sqliteAuthSessionStorage";
 import {
-  apiFetch,
-  ApiError,
-  clearAuthToken,
-  getAuthToken,
-  setAuthToken,
-} from "./apiClient";
-import {
-  KEYS,
   emitChange,
-  isBrowser,
-  read,
-  write,
 } from "@/infrastructure/local/localStorageDatabase";
 import { isConnectionOnline } from "@/services/connectionService";
 import { persistOwnerControlledAdminModes } from "@/services/ownerControlledModeService";
+import { apiFetch, ApiError, clearAuthToken, getAuthToken, setAuthToken } from "./apiClient";
 
 interface RemoteUser {
   id: string;
@@ -59,33 +54,16 @@ function toDomainUser(user: RemoteUser): User {
 }
 
 function persistUser(user: User | null, mode: "online" | "offline" | null) {
-  if (!isBrowser()) {
-    return;
-  }
-
-  if (!user) {
-    localStorage.removeItem(KEYS.user);
-    localStorage.removeItem(KEYS.authSessionMode);
-    emitChange();
-    return;
-  }
-
-  write(KEYS.user, user);
-
-  if (mode) {
-    write(KEYS.authSessionMode, mode);
-  } else {
-    localStorage.removeItem(KEYS.authSessionMode);
-    emitChange();
-  }
+  setCurrentUserSession(user, mode);
+  emitChange();
 }
 
 function readStoredUser() {
-  return read<User | null>(KEYS.user, null);
+  return getCurrentUserSession();
 }
 
 function readSessionMode() {
-  return read<string | null>(KEYS.authSessionMode, null);
+  return getCurrentSessionMode();
 }
 
 export function isRemoteAuthOfflineSession() {
@@ -103,7 +81,12 @@ async function persistOfflineLoginArtifacts(
       lastOnlineLoginAt: mode === "online" ? new Date().toISOString() : undefined,
       syncStatus: mode === "online" ? "synced" : "local",
     });
-    await persistSqliteAuthSession({ token, user, mode });
+
+    await persistSqliteAuthSession({
+      token,
+      user,
+      mode,
+    });
   } catch (error) {
     console.error("Offline credential persistence failed.", error);
   }
@@ -120,12 +103,7 @@ function shouldTryLocalCredentialFallback(error: unknown) {
     return false;
   }
 
-  return (
-    error.status === 0 ||
-    error.status === 400 ||
-    error.status === 401 ||
-    error.status >= 500
-  );
+  return error.status === 0 || error.status === 400 || error.status === 401 || error.status >= 500;
 }
 
 export const authRemoteRepository: AuthRepository = {
@@ -145,10 +123,13 @@ export const authRemoteRepository: AuthRepository = {
         });
 
         setAuthToken(response.token);
+
         const user = toDomainUser(response.user);
+
         persistUser(user, "online");
         await persistOwnerControlledAdminModes(response.user);
         await persistOfflineLoginArtifacts(user, password, response.token, "online");
+
         return user;
       } catch (error) {
         if (!shouldTryLocalCredentialFallback(error)) {
@@ -188,14 +169,21 @@ export const authRemoteRepository: AuthRepository = {
     clearAuthToken();
     persistUser(localResult.user, "offline");
     await persistOfflineLoginArtifacts(localResult.user, password, null, "offline");
+
     return localResult.user;
   },
+
   async logout() {
     const token = getAuthToken();
 
     clearAuthToken();
     persistUser(null, null);
-    void clearSqliteAuthSession();
+
+    try {
+      await clearSqliteAuthSession();
+    } catch (error) {
+      console.error("Failed to clear SQLite auth session.", error);
+    }
 
     try {
       if (token) {
@@ -210,6 +198,7 @@ export const authRemoteRepository: AuthRepository = {
       // Ignore logout API failures and always clear local auth state.
     }
   },
+
   getCurrentUser() {
     if (getAuthToken()) {
       return readStoredUser();

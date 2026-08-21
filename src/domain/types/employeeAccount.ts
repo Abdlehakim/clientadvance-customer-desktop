@@ -1,5 +1,7 @@
 import type { Role } from "./user";
 
+export type EmployeeSyncAction = "none" | "create" | "update" | "delete";
+
 export interface EmployeeAccount {
   id: string;
   name: string;
@@ -10,6 +12,10 @@ export interface EmployeeAccount {
   created_at: string;
   updated_at: string;
   displayPassword?: string;
+  sync_status?: "local" | "synced";
+  pending_sync?: boolean;
+  sync_action?: EmployeeSyncAction;
+  deleted_at?: string | null;
 }
 
 export interface EmployeeAccountListResult {

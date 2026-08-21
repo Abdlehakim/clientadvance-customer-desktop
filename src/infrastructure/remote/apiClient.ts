@@ -1,4 +1,3 @@
-import { isBrowser } from "@/infrastructure/local/localStorageDatabase";
 import {
   recordApiConnectionFailure,
   recordApiConnectionSuccess,
@@ -10,9 +9,8 @@ const env = import.meta.env as ImportMetaEnv & {
 const DEVELOPMENT_API_BASE_URL = "http://localhost:4000/api";
 const MISSING_PRODUCTION_API_BASE_URL_MESSAGE =
   "Missing VITE_API_BASE_URL for production build. Set it to the app-server API URL, for example http://102.204.205.77:4101/api.";
-const AUTH_TOKEN_KEY = "gestion_facile_auth_token";
 
-let authToken: string | null = isBrowser() ? localStorage.getItem(AUTH_TOKEN_KEY) : null;
+let authToken: string | null = null;
 
 function normalizeApiBaseUrl(value: string) {
   const normalized = value.trim();
@@ -46,19 +44,15 @@ export function buildApiUrl(path: string) {
 }
 
 export function getAuthToken() {
-  if (!isBrowser()) return authToken;
-  authToken = localStorage.getItem(AUTH_TOKEN_KEY);
   return authToken;
 }
 
 export function setAuthToken(token: string) {
   authToken = token;
-  if (isBrowser()) localStorage.setItem(AUTH_TOKEN_KEY, token);
 }
 
 export function clearAuthToken() {
   authToken = null;
-  if (isBrowser()) localStorage.removeItem(AUTH_TOKEN_KEY);
 }
 
 export class ApiError extends Error {

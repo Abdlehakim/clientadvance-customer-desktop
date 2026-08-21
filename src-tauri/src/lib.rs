@@ -23,7 +23,7 @@ use std::{
   path::{Path, PathBuf},
   process::Command,
   sync::Mutex,
-  time::Duration,
+  time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::{AppHandle, Manager, State};
 
@@ -156,7 +156,9 @@ CREATE TABLE IF NOT EXISTS local_users (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   sync_status TEXT NOT NULL DEFAULT 'local',
-  pending_sync INTEGER NOT NULL DEFAULT 0
+  pending_sync INTEGER NOT NULL DEFAULT 0,
+  sync_action TEXT NOT NULL DEFAULT 'none',
+  deleted_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS license_state (
@@ -205,6 +207,13 @@ struct SqliteDatabaseInfo {
   path: String,
   directory: String,
   is_custom: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SqliteDatabaseBackupInfo {
+  path: String,
+  directory: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -789,6 +798,15 @@ fn verify_sqlite_database(path: &Path) -> Result<(), String> {
   Ok(())
 }
 
+fn database_backup_file_name() -> String {
+  let timestamp = SystemTime::now()
+    .duration_since(UNIX_EPOCH)
+    .map(|duration| duration.as_secs())
+    .unwrap_or(0);
+
+  format!("gestion-facile.backup.{timestamp}.sqlite")
+}
+
 fn list_table_columns(connection: &Connection, table_name: &str) -> Result<Vec<String>, String> {
   let pragma = format!("PRAGMA table_info({table_name})");
   let mut statement = connection
@@ -1038,6 +1056,18 @@ fn ensure_schema_upgrades(connection: &Connection) -> Result<(), String> {
     "local_users",
     "pending_sync",
     "INTEGER NOT NULL DEFAULT 0",
+  )?;
+  add_column_if_missing(
+    connection,
+    "local_users",
+    "sync_action",
+    "TEXT NOT NULL DEFAULT 'none'",
+  )?;
+  add_column_if_missing(
+    connection,
+    "local_users",
+    "deleted_at",
+    "TEXT",
   )?;
   add_column_if_missing(
     connection,
@@ -1331,6 +1361,31 @@ fn get_database_location(
 }
 
 #[tauri::command]
+fn backup_database(
+  app: AppHandle,
+  state: State<'_, DatabaseAccessState>,
+) -> Result<SqliteDatabaseBackupInfo, String> {
+  let _guard = state
+    .sqlite_lock
+    .lock()
+    .map_err(|_| "Database access lock poisoned.".to_string())?;
+  let (connection, path) = open_database(&app)?;
+  let directory = path
+    .parent()
+    .ok_or_else(|| "Database directory not found.".to_string())?
+    .to_path_buf();
+  let backup_path = directory.join(database_backup_file_name());
+
+  copy_sqlite_database(&connection, &backup_path)?;
+  verify_sqlite_database(&backup_path)?;
+
+  Ok(SqliteDatabaseBackupInfo {
+    path: backup_path.to_string_lossy().into_owned(),
+    directory: directory.to_string_lossy().into_owned(),
+  })
+}
+
+#[tauri::command]
 fn open_database_location(
   app: AppHandle,
   state: State<'_, DatabaseAccessState>,
@@ -1578,6 +1633,7 @@ pub fn run() {
       sqlite_execute,
       sqlite_query,
       get_database_location,
+      backup_database,
       open_database_location,
       choose_database_folder,
       get_or_create_device_id,

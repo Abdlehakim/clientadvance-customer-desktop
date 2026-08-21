@@ -1,7 +1,7 @@
 import type { PaymentRepository } from "@/domain/repositories";
 import type { AdminSettings, Client, Payment, PaymentCreateInput } from "@/domain/types";
 import { formatTND } from "@/lib/format";
-import { authLocalRepository } from "@/infrastructure/local/authLocalRepository";
+import { getCurrentUserSession } from "@/infrastructure/auth/currentUserSession";
 import { uid } from "@/infrastructure/local/localStorageDatabase";
 import { buildPaymentNotifications } from "@/services/paymentNotificationService";
 import { activityLogSQLiteRepository } from "./activityLogSQLiteRepository";
@@ -202,7 +202,7 @@ export const paymentSQLiteRepository: PaymentRepository = {
     return rows.map(toPayment);
   },
   async create(input: PaymentCreateInput) {
-    const user = authLocalRepository.getCurrentUser();
+    const user = getCurrentUserSession();
     const now = new Date().toISOString();
     const payment: Payment = {
       ...input,
@@ -276,7 +276,7 @@ export const paymentSQLiteRepository: PaymentRepository = {
       return;
     }
 
-    const user = authLocalRepository.getCurrentUser();
+    const user = getCurrentUserSession();
     const client = await getPaymentClient(payment.client_id);
     const db = await getDb();
 

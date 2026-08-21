@@ -18,6 +18,11 @@ export interface ChangeDatabaseLocationResult {
   requiresConfirmation: boolean;
 }
 
+export interface SqliteDatabaseBackupInfo {
+  path: string;
+  directory: string;
+}
+
 export interface SqliteExecuteResult {
   rowsAffected: number;
   lastInsertRowid: number;
@@ -156,6 +161,10 @@ export async function changeDatabaseLocation(
   return invokeTauriCommand<ChangeDatabaseLocationResult>("change_database_location", {
     request: { folderPath, replaceExisting },
   });
+}
+
+export async function backupDatabase() {
+  return invokeTauriCommand<SqliteDatabaseBackupInfo>("backup_database");
 }
 
 export async function sqliteExecute(sql: string, params: SqliteParam[] = []) {

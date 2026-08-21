@@ -1,6 +1,6 @@
 import type { AdminSettingsRepository } from "@/domain/repositories";
 import type { AdminSettings } from "@/domain/types";
-import { authLocalRepository } from "@/infrastructure/local/authLocalRepository";
+import { getCurrentUserSession } from "@/infrastructure/auth/currentUserSession";
 import {
   applyAdminSettingsUpdate,
   createAdminSettingsFallback,
@@ -147,7 +147,7 @@ export const adminSettingsSQLiteRepository: AdminSettingsRepository = {
     return rows[0] ? toAdminSettings(rows[0]) : fallback();
   },
   async update(patch) {
-    const user = authLocalRepository.getCurrentUser();
+    const user = getCurrentUserSession();
 
     if (user?.role !== "admin") {
       throw new Error("Accès refusé. Cette section est réservée à l’administrateur.");

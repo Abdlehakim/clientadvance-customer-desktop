@@ -1,6 +1,6 @@
 import type { ClientRepository } from "@/domain/repositories";
 import type { Client, ClientCreateInput, ClientUpdateInput } from "@/domain/types";
-import { authLocalRepository } from "@/infrastructure/local/authLocalRepository";
+import { getCurrentUserSession } from "@/infrastructure/auth/currentUserSession";
 import { uid } from "@/infrastructure/local/localStorageDatabase";
 import { normalizeStoredTunisianPhone } from "@/lib/tunisianPhone";
 import { activityLogSQLiteRepository } from "./activityLogSQLiteRepository";
@@ -170,7 +170,7 @@ export const clientSQLiteRepository: ClientRepository = {
     return rows[0] ? toClient(rows[0]) : null;
   },
   async create(input: ClientCreateInput) {
-    const user = authLocalRepository.getCurrentUser();
+    const user = getCurrentUserSession();
     const now = new Date().toISOString();
     const nextInput = {
       cinIssuedAt: input.cinIssuedAt ?? "",
@@ -245,7 +245,7 @@ export const clientSQLiteRepository: ClientRepository = {
   },
   async update(id: string, patch: ClientUpdateInput) {
     const current = await getExistingClient(id);
-    const user = authLocalRepository.getCurrentUser();
+    const user = getCurrentUserSession();
     const now = new Date().toISOString();
 
     if (!current) {
@@ -317,7 +317,7 @@ export const clientSQLiteRepository: ClientRepository = {
   },
   async delete(id: string) {
     const current = await getExistingClient(id);
-    const user = authLocalRepository.getCurrentUser();
+    const user = getCurrentUserSession();
     const deletedAt = new Date().toISOString();
 
     if (!current) {
