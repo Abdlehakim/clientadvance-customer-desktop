@@ -5,7 +5,7 @@ description = "ClientAdvans desktop shell"
 edition = "2021"
 
 [lib]
-name = "gestion_facile_tauri"
+name = "client_advance_tauri"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
