@@ -1162,7 +1162,18 @@ export async function authenticateOfflineCredential(
   password: string,
 ): Promise<OfflineAuthVerificationResult> {
   await initializeOfflineAuthStorage();
+  const resolvedIdentifier = resolveLoginIdentifier(identifier);
   const record = await getOfflineAuthRecordByIdentifier(identifier);
+
+  if (record?.role === "admin") {
+    const hasStoredPhone =
+      normalizePhoneKey(record.phone_normalized || record.phone).length > 0;
+
+    if (hasStoredPhone && resolvedIdentifier.type !== "phone") {
+      return { status: "invalid" };
+    }
+  }
+
   return verifyOfflineAuthRecord(record, password);
 }
 

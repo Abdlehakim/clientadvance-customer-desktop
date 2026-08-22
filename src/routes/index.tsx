@@ -17,7 +17,7 @@ export const Route = createFileRoute("/")({
 
 function LoginPage() {
   const navigate = useNavigate();
-  const [email, setEmail] = useState("");
+  const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -42,7 +42,7 @@ function LoginPage() {
     setIsSubmitting(true);
 
     try {
-      const user = await Promise.resolve(login(email.trim(), password));
+      const user = await Promise.resolve(login(identifier.trim(), password));
 
       if (!user) {
         setError(LOGIN_ERROR_MESSAGE);
@@ -70,13 +70,15 @@ function LoginPage() {
 
         <form onSubmit={submit} className="space-y-4">
           <div className="space-y-1.5">
-            <Label htmlFor="email">Email ou téléphone</Label>
+            <Label htmlFor="identifier">
+              Numéro de téléphone / identifiant E-user
+            </Label>
             <Input
-              id="email"
+              id="identifier"
               type="text"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              placeholder="Email ou numéro de téléphone"
+              value={identifier}
+              onChange={(event) => setIdentifier(event.target.value)}
+              placeholder="Numéro administrateur ou identifiant E-user"
               disabled={isSubmitting}
             />
           </div>
