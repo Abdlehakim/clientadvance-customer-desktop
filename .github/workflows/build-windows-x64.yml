@@ -1,0 +1,427 @@
+name: Build Windows x64 release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_id:
+        description: Approved DesktopRelease UUID
+        required: true
+        type: string
+      expected_version:
+        description: Approved semantic version
+        required: true
+        type: string
+      commit_sha:
+        description: Approved 40-character commit SHA
+        required: true
+        type: string
+      current_version:
+        description: Currently published semantic version
+        required: false
+        default: ""
+        type: string
+
+concurrency:
+  group: clientadvance-desktop-release-x64
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows-x64:
+    name: Build and upload Windows x64 installer
+    runs-on: windows-latest
+
+    steps:
+      - name: Validate workflow inputs
+        shell: pwsh
+        env:
+          RELEASE_ID: ${{ inputs.release_id }}
+          EXPECTED_VERSION: ${{ inputs.expected_version }}
+          COMMIT_SHA: ${{ inputs.commit_sha }}
+          CURRENT_VERSION: ${{ inputs.current_version }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $uuidPattern = "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+          $semverPattern = "^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
+          $commitPattern = "^[0-9a-fA-F]{40}$"
+
+          if ($env:RELEASE_ID -notmatch $uuidPattern) {
+            throw "Invalid release_id input."
+          }
+          if ($env:EXPECTED_VERSION -notmatch $semverPattern) {
+            throw "Invalid expected_version input."
+          }
+          if ($env:COMMIT_SHA -notmatch $commitPattern) {
+            throw "Invalid commit_sha input."
+          }
+          if (
+            -not [string]::IsNullOrWhiteSpace($env:CURRENT_VERSION) -and
+            $env:CURRENT_VERSION -notmatch $semverPattern
+          ) {
+            throw "Invalid current_version input."
+          }
+
+      - name: Check out the approved commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit_sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Set up stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate checked-out source
+        shell: pwsh
+        env:
+          EXPECTED_VERSION: ${{ inputs.expected_version }}
+          COMMIT_SHA: ${{ inputs.commit_sha }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $actualCommit = (git rev-parse HEAD).Trim()
+
+          if (
+            $actualCommit.ToLowerInvariant() -ne
+            $env:COMMIT_SHA.ToLowerInvariant()
+          ) {
+            throw "The checked-out commit does not match the approved commit."
+          }
+
+          $tauriConfig = Get-Content -LiteralPath "src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json
+
+          if ([string]$tauriConfig.version -ne $env:EXPECTED_VERSION) {
+            throw "The Tauri version does not match the approved version."
+          }
+
+      - name: Validate release configuration
+        shell: pwsh
+        env:
+          CALLBACK_BASE_URL: ${{ secrets.CLIENTADVANCE_RELEASE_CALLBACK_BASE_URL }}
+          CALLBACK_TOKEN: ${{ secrets.DESKTOP_RELEASE_CALLBACK_TOKEN }}
+          SSH_HOST: ${{ secrets.CLIENTADVANCE_RELEASE_SSH_HOST }}
+          SSH_PORT: ${{ secrets.CLIENTADVANCE_RELEASE_SSH_PORT }}
+          SSH_USER: ${{ secrets.CLIENTADVANCE_RELEASE_SSH_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.CLIENTADVANCE_RELEASE_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.CLIENTADVANCE_RELEASE_SSH_KNOWN_HOSTS }}
+          SERVER_PATH: ${{ secrets.DESKTOP_RELEASE_SERVER_PATH }}
+          PUBLIC_BASE_URL: ${{ secrets.DESKTOP_RELEASE_PUBLIC_BASE_URL }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          function Assert-SafeHttpsUrl {
+            param([string]$Value, [string]$Name)
+
+            $uri = $null
+            if (
+              [string]::IsNullOrWhiteSpace($Value) -or
+              -not [Uri]::TryCreate($Value, [UriKind]::Absolute, [ref]$uri) -or
+              $uri.Scheme -ne "https" -or
+              -not [string]::IsNullOrEmpty($uri.UserInfo) -or
+              -not [string]::IsNullOrEmpty($uri.Query) -or
+              -not [string]::IsNullOrEmpty($uri.Fragment)
+            ) {
+              throw "Invalid $Name configuration."
+            }
+          }
+
+          Assert-SafeHttpsUrl $env:CALLBACK_BASE_URL "callback URL"
+          Assert-SafeHttpsUrl $env:PUBLIC_BASE_URL "public URL"
+
+          if ([string]::IsNullOrWhiteSpace($env:CALLBACK_TOKEN)) {
+            throw "Missing callback token configuration."
+          }
+          if (
+            [string]::IsNullOrWhiteSpace($env:SSH_HOST) -or
+            $env:SSH_HOST.Length -gt 253 -or
+            $env:SSH_HOST -notmatch "^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$" -or
+            $env:SSH_HOST.Contains("..")
+          ) {
+            throw "Invalid SSH host configuration."
+          }
+
+          [int]$sshPort = 0
+          if (
+            -not [int]::TryParse($env:SSH_PORT, [ref]$sshPort) -or
+            $sshPort -lt 1 -or
+            $sshPort -gt 65535
+          ) {
+            throw "Invalid SSH port configuration."
+          }
+          if (
+            [string]::IsNullOrWhiteSpace($env:SSH_USER) -or
+            $env:SSH_USER -notmatch "^[A-Za-z_][A-Za-z0-9._-]{0,31}$"
+          ) {
+            throw "Invalid SSH user configuration."
+          }
+          if (
+            [string]::IsNullOrWhiteSpace($env:SSH_PRIVATE_KEY) -or
+            [string]::IsNullOrWhiteSpace($env:SSH_KNOWN_HOSTS)
+          ) {
+            throw "Missing SSH authentication configuration."
+          }
+          if (
+            [string]::IsNullOrWhiteSpace($env:SERVER_PATH) -or
+            -not $env:SERVER_PATH.StartsWith("/") -or
+            $env:SERVER_PATH.Contains("..") -or
+            $env:SERVER_PATH.Contains("//") -or
+            $env:SERVER_PATH -notmatch "^/[A-Za-z0-9._/-]+$"
+          ) {
+            throw "Invalid release server path configuration."
+          }
+
+      - name: Notify build started
+        shell: pwsh
+        env:
+          CALLBACK_BASE_URL: ${{ secrets.CLIENTADVANCE_RELEASE_CALLBACK_BASE_URL }}
+          CALLBACK_TOKEN: ${{ secrets.DESKTOP_RELEASE_CALLBACK_TOKEN }}
+          RELEASE_ID: ${{ inputs.release_id }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $callbackBase = $env:CALLBACK_BASE_URL.TrimEnd("/")
+          $headers = @{
+            "x-release-callback-token" = $env:CALLBACK_TOKEN
+          }
+          $body = @{
+            workflowRunId = $env:GITHUB_RUN_ID
+          } | ConvertTo-Json -Compress
+          $request = @{
+            Uri = "$callbackBase/$env:RELEASE_ID/building"
+            Method = "Post"
+            Headers = $headers
+            ContentType = "application/json"
+            Body = $body
+          }
+
+          Invoke-RestMethod @request | Out-Null
+
+      - name: Build the Tauri NSIS installer
+        run: npm run tauri:build
+
+      - name: Prepare canonical installer
+        id: installer
+        shell: pwsh
+        env:
+          EXPECTED_VERSION: ${{ inputs.expected_version }}
+          PUBLIC_BASE_URL: ${{ secrets.DESKTOP_RELEASE_PUBLIC_BASE_URL }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $nsisDirectory = "src-tauri/target/release/bundle/nsis"
+          $installers = @(
+            Get-ChildItem -LiteralPath $nsisDirectory -File -Filter "*.exe"
+          )
+
+          if ($installers.Count -ne 1) {
+            throw "Expected exactly one Tauri NSIS installer."
+          }
+
+          $filename = "ClientAdvans-$env:EXPECTED_VERSION-x64.exe"
+          $outputDirectory = Join-Path $env:RUNNER_TEMP "clientadvance-release-output"
+          New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
+          $outputPath = Join-Path $outputDirectory $filename
+          Copy-Item -LiteralPath $installers[0].FullName -Destination $outputPath -Force
+
+          $sha256 = (Get-FileHash -LiteralPath $outputPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          $fileSizeBytes = (Get-Item -LiteralPath $outputPath).Length.ToString()
+          $publicBase = $env:PUBLIC_BASE_URL.TrimEnd("/")
+          $downloadUrl = "$publicBase/$env:EXPECTED_VERSION/$filename"
+          $downloadUri = [Uri]$downloadUrl
+
+          if (
+            $downloadUri.Scheme -ne "https" -or
+            -not [string]::IsNullOrEmpty($downloadUri.UserInfo) -or
+            -not [string]::IsNullOrEmpty($downloadUri.Query) -or
+            -not [string]::IsNullOrEmpty($downloadUri.Fragment)
+          ) {
+            throw "Invalid final download URL."
+          }
+
+          "filename=$filename" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "path=$outputPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "sha256=$sha256" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "file_size_bytes=$fileSizeBytes" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "download_url=$downloadUrl" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Notify upload started
+        shell: pwsh
+        env:
+          CALLBACK_BASE_URL: ${{ secrets.CLIENTADVANCE_RELEASE_CALLBACK_BASE_URL }}
+          CALLBACK_TOKEN: ${{ secrets.DESKTOP_RELEASE_CALLBACK_TOKEN }}
+          RELEASE_ID: ${{ inputs.release_id }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $callbackBase = $env:CALLBACK_BASE_URL.TrimEnd("/")
+          $headers = @{
+            "x-release-callback-token" = $env:CALLBACK_TOKEN
+          }
+          $body = @{
+            workflowRunId = $env:GITHUB_RUN_ID
+          } | ConvertTo-Json -Compress
+          $request = @{
+            Uri = "$callbackBase/$env:RELEASE_ID/uploading"
+            Method = "Post"
+            Headers = $headers
+            ContentType = "application/json"
+            Body = $body
+          }
+
+          Invoke-RestMethod @request | Out-Null
+
+      - name: Upload and atomically publish installer file
+        shell: pwsh
+        env:
+          EXPECTED_VERSION: ${{ inputs.expected_version }}
+          INSTALLER_FILENAME: ${{ steps.installer.outputs.filename }}
+          INSTALLER_PATH: ${{ steps.installer.outputs.path }}
+          INSTALLER_SHA256: ${{ steps.installer.outputs.sha256 }}
+          SSH_HOST: ${{ secrets.CLIENTADVANCE_RELEASE_SSH_HOST }}
+          SSH_PORT: ${{ secrets.CLIENTADVANCE_RELEASE_SSH_PORT }}
+          SSH_USER: ${{ secrets.CLIENTADVANCE_RELEASE_SSH_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.CLIENTADVANCE_RELEASE_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.CLIENTADVANCE_RELEASE_SSH_KNOWN_HOSTS }}
+          SERVER_PATH: ${{ secrets.DESKTOP_RELEASE_SERVER_PATH }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $sshDirectory = Join-Path $env:RUNNER_TEMP "clientadvance-release-ssh"
+          New-Item -ItemType Directory -Path $sshDirectory -Force | Out-Null
+          $keyPath = Join-Path $sshDirectory "release_key"
+          $knownHostsPath = Join-Path $sshDirectory "known_hosts"
+          $utf8WithoutBom = [Text.UTF8Encoding]::new($false)
+          [IO.File]::WriteAllText($keyPath, $env:SSH_PRIVATE_KEY, $utf8WithoutBom)
+          [IO.File]::WriteAllText($knownHostsPath, $env:SSH_KNOWN_HOSTS, $utf8WithoutBom)
+
+          $identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+          & icacls.exe $keyPath /inheritance:r /grant:r "$($identity):(R)" | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            throw "Unable to protect the temporary SSH key."
+          }
+
+          $sshHost = $env:SSH_HOST
+          $sshPort = $env:SSH_PORT
+          $sshUser = $env:SSH_USER
+          $serverPath = $env:SERVER_PATH.TrimEnd("/")
+          $targetDirectory = "$serverPath/$env:EXPECTED_VERSION"
+          $remoteFinalPath = "$targetDirectory/$env:INSTALLER_FILENAME"
+          $remoteTemporaryPath = "$remoteFinalPath.upload-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $remoteHost = "$sshUser@$sshHost"
+          $sshOptions = @(
+            "-i", $keyPath,
+            "-p", $sshPort,
+            "-o", "StrictHostKeyChecking=yes",
+            "-o", "UserKnownHostsFile=$knownHostsPath",
+            "-o", "PasswordAuthentication=no",
+            "-o", "KbdInteractiveAuthentication=no",
+            "-o", "BatchMode=yes"
+          )
+          $scpOptions = @(
+            "-i", $keyPath,
+            "-P", $sshPort,
+            "-o", "StrictHostKeyChecking=yes",
+            "-o", "UserKnownHostsFile=$knownHostsPath",
+            "-o", "PasswordAuthentication=no",
+            "-o", "KbdInteractiveAuthentication=no",
+            "-o", "BatchMode=yes"
+          )
+
+          & ssh.exe @sshOptions $remoteHost "mkdir -p -- '$targetDirectory'"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Unable to create the remote release directory."
+          }
+
+          $remoteDestination = "$($sshUser)@$($sshHost):$remoteTemporaryPath"
+          & scp.exe @scpOptions $env:INSTALLER_PATH $remoteDestination
+          if ($LASTEXITCODE -ne 0) {
+            throw "Unable to upload the release installer."
+          }
+
+          $verifyAndPublish = (
+            "printf '%s  %s\n' '$env:INSTALLER_SHA256' " +
+            "'$remoteTemporaryPath' | sha256sum --check --status " +
+            "&& mv -f -- '$remoteTemporaryPath' '$remoteFinalPath'"
+          )
+          & ssh.exe @sshOptions $remoteHost $verifyAndPublish
+          if ($LASTEXITCODE -ne 0) {
+            throw "Remote checksum validation or atomic publish failed."
+          }
+
+      - name: Notify release completion
+        shell: pwsh
+        env:
+          CALLBACK_BASE_URL: ${{ secrets.CLIENTADVANCE_RELEASE_CALLBACK_BASE_URL }}
+          CALLBACK_TOKEN: ${{ secrets.DESKTOP_RELEASE_CALLBACK_TOKEN }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          EXPECTED_VERSION: ${{ inputs.expected_version }}
+          COMMIT_SHA: ${{ inputs.commit_sha }}
+          INSTALLER_FILENAME: ${{ steps.installer.outputs.filename }}
+          DOWNLOAD_URL: ${{ steps.installer.outputs.download_url }}
+          INSTALLER_SHA256: ${{ steps.installer.outputs.sha256 }}
+          FILE_SIZE_BYTES: ${{ steps.installer.outputs.file_size_bytes }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $callbackBase = $env:CALLBACK_BASE_URL.TrimEnd("/")
+          $headers = @{
+            "x-release-callback-token" = $env:CALLBACK_TOKEN
+          }
+          $body = @{
+            version = $env:EXPECTED_VERSION
+            commitSha = $env:COMMIT_SHA.ToLowerInvariant()
+            workflowRunId = $env:GITHUB_RUN_ID
+            filename = $env:INSTALLER_FILENAME
+            downloadUrl = $env:DOWNLOAD_URL
+            sha256 = $env:INSTALLER_SHA256
+            fileSizeBytes = $env:FILE_SIZE_BYTES
+          } | ConvertTo-Json -Compress
+          $request = @{
+            Uri = "$callbackBase/$env:RELEASE_ID/complete"
+            Method = "Post"
+            Headers = $headers
+            ContentType = "application/json"
+            Body = $body
+          }
+
+          Invoke-RestMethod @request | Out-Null
+
+      - name: Remove temporary SSH credentials
+        if: always()
+        shell: pwsh
+        run: |
+          $sshDirectory = Join-Path $env:RUNNER_TEMP "clientadvance-release-ssh"
+          if (Test-Path -LiteralPath $sshDirectory) {
+            Remove-Item -LiteralPath $sshDirectory -Recurse -Force
+          }
+
+      - name: Notify release failure
+        if: failure()
+        continue-on-error: true
+        shell: pwsh
+        env:
+          CALLBACK_BASE_URL: ${{ secrets.CLIENTADVANCE_RELEASE_CALLBACK_BASE_URL }}
+          CALLBACK_TOKEN: ${{ secrets.DESKTOP_RELEASE_CALLBACK_TOKEN }}
+          RELEASE_ID: ${{ inputs.release_id }}
+        run: |
+          $callbackBase = $env:CALLBACK_BASE_URL.TrimEnd("/")
+          $headers = @{
+            "x-release-callback-token" = $env:CALLBACK_TOKEN
+          }
+          $body = @{
+            workflowRunId = $env:GITHUB_RUN_ID
+            errorMessage = "GitHub Actions desktop build failed."
+          } | ConvertTo-Json -Compress
+          $request = @{
+            Uri = "$callbackBase/$env:RELEASE_ID/fail"
+            Method = "Post"
+            Headers = $headers
+            ContentType = "application/json"
+            Body = $body
+          }
+
+          Invoke-RestMethod @request | Out-Null
