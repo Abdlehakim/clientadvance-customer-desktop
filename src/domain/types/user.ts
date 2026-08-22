@@ -11,6 +11,7 @@ export interface User {
   company_id?: string | null;
   company_name?: string | null;
   company_status?: "active" | "suspended" | "archived" | null;
+  account_expires_at?: string | null;
   company_contact_email?: string | null;
   company_contact_phone?: string | null;
   company_admin_name?: string | null;

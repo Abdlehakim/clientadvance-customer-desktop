@@ -6,4 +6,3 @@ export * from "./adminSettings";
 export * from "./activityLog";
 export * from "./notification";
 export * from "./employeeAccount";
-export * from "./license";

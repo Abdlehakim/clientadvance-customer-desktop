@@ -31,6 +31,7 @@ interface RemoteUser {
   company_id?: string | null;
   company_name?: string | null;
   company_status?: "active" | "suspended" | "archived" | null;
+  account_expires_at?: string | null;
   company_contact_email?: string | null;
   company_contact_phone?: string | null;
   company_admin_name?: string | null;
@@ -156,6 +157,10 @@ export const authRemoteRepository: AuthRepository = {
 
     if (localResult.status === "inactive") {
       throw new Error("Compte désactivé");
+    }
+
+    if (localResult.status === "expired") {
+      throw new Error("Compte expiré");
     }
 
     if (

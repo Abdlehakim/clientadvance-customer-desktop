@@ -3,7 +3,6 @@ import { ShieldAlert } from "lucide-react";
 import { AdminSettingsFormCard } from "@/components/AdminSettingsFormCard";
 import { AppLayout } from "@/components/AppLayout";
 import { DatabaseLocationCard } from "@/components/DatabaseLocationCard";
-import { LicenseInfoCard } from "@/components/LicenseInfoCard";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useHasMounted } from "@/hooks/useHasMounted";
@@ -63,7 +62,6 @@ function SettingsPage() {
           <TabsList className="h-auto min-w-max justify-start">
             <TabsTrigger value="notifications">Envoi des notifications</TabsTrigger>
             <TabsTrigger value="smtp">Paramètres email SMTP</TabsTrigger>
-            <TabsTrigger value="license">Licence de l’application</TabsTrigger>
             <TabsTrigger value="pending">Notifications en attente</TabsTrigger>
             <TabsTrigger value="database">Base de données locale</TabsTrigger>
           </TabsList>
@@ -88,9 +86,6 @@ function SettingsPage() {
           />
         </TabsContent>
 
-        <TabsContent value="license" className="mt-0">
-          <LicenseInfoCard actionButtonClassName={SETTINGS_ACTION_BUTTON_CLASS} />
-        </TabsContent>
 
         <TabsContent value="pending" className="mt-0">
           <Card className="p-6 shadow-card">

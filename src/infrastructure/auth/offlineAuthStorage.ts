@@ -45,6 +45,7 @@ interface OfflineAuthRecord {
   role: Role;
   company_id: string | null;
   company_name: string | null;
+  account_expires_at: string | null;
   is_active: boolean;
   offline_enabled: boolean;
   password_hash: string;
@@ -70,6 +71,7 @@ interface OfflineAuthSqliteRow extends SqliteRow {
   role: unknown;
   company_id: unknown;
   company_name: unknown;
+  account_expires_at: unknown;
   is_active: unknown;
   offline_enabled: unknown;
   password_hash: unknown;
@@ -92,7 +94,8 @@ type OfflineAuthVerificationResult =
   | { status: "success"; user: User }
   | { status: "missing" }
   | { status: "invalid" }
-  | { status: "inactive" };
+  | { status: "inactive" }
+  | { status: "expired" };
 
 export const OFFLINE_LOGIN_UNAVAILABLE_MESSAGE =
   "Identifiants incorrects ou serveur indisponible.";
@@ -212,6 +215,7 @@ function toSessionUser(record: OfflineAuthRecord): User {
     role: record.role,
     company_id: record.company_id,
     company_name: record.company_name,
+    account_expires_at: record.account_expires_at,
   };
 }
 
@@ -249,6 +253,7 @@ function normalizeLocalStorageRecord(
     role: readString(value?.role) === "employe" ? "employe" : "admin",
     company_id: readNullableString(value?.company_id),
     company_name: readNullableString(value?.company_name),
+    account_expires_at: readNullableString(value?.account_expires_at),
     is_active: readBoolean(value?.is_active, true),
     offline_enabled: readBoolean(value?.offline_enabled, passwordHash.length > 0),
     password_hash: passwordHash,
@@ -283,6 +288,7 @@ function toOfflineAuthRecord(row: OfflineAuthSqliteRow): OfflineAuthRecord {
     role: readString(row.role) === "employe" ? "employe" : "admin",
     company_id: readNullableString(row.company_id),
     company_name: readNullableString(row.company_name),
+    account_expires_at: readNullableString(row.account_expires_at),
     is_active: readBoolean(row.is_active, true),
     offline_enabled: readBoolean(row.offline_enabled, true),
     password_hash: readString(row.password_hash),
@@ -314,6 +320,7 @@ function readLocalStorageRecords() {
       (record, index) =>
         currentRecords[index]?.phone !== record.phone ||
         currentRecords[index]?.phone_normalized !== record.phone_normalized ||
+        currentRecords[index]?.account_expires_at !== record.account_expires_at ||
         currentRecords[index]?.display_password !== record.display_password ||
         currentRecords[index]?.sync_action !== record.sync_action ||
         currentRecords[index]?.deleted_at !== record.deleted_at,
@@ -361,6 +368,7 @@ function areRecordsEquivalent(left: OfflineAuthRecord, right: OfflineAuthRecord)
     left.role === right.role &&
     left.company_id === right.company_id &&
     left.company_name === right.company_name &&
+    left.account_expires_at === right.account_expires_at &&
     left.is_active === right.is_active &&
     left.offline_enabled === right.offline_enabled &&
     left.password_hash === right.password_hash &&
@@ -386,7 +394,7 @@ function createPlaceholderPassword(
 }
 
 async function createRecord(
-  user: Pick<User, "id" | "email" | "name" | "role" | "company_id" | "company_name"> & {
+  user: Pick<User, "id" | "email" | "name" | "role" | "company_id" | "company_name" | "account_expires_at"> & {
     phone?: string | null;
   },
   options: {
@@ -447,6 +455,10 @@ async function createRecord(
     role: user.role,
     company_id: user.company_id ?? options.existing?.company_id ?? null,
     company_name: user.company_name ?? options.existing?.company_name ?? null,
+    account_expires_at:
+      user.account_expires_at !== undefined
+        ? user.account_expires_at
+        : options.existing?.account_expires_at ?? null,
     is_active: options.isActive ?? options.existing?.is_active ?? true,
     offline_enabled: offlineEnabled,
     password_hash: passwordHash,
@@ -540,6 +552,7 @@ async function getSqliteOfflineAuthRecordByEmail(email: string) {
         role,
         company_id,
         company_name,
+        account_expires_at,
         is_active,
         offline_enabled,
         password_hash,
@@ -577,6 +590,7 @@ async function getSqliteOfflineAuthRecordById(id: string) {
         role,
         company_id,
         company_name,
+        account_expires_at,
         is_active,
         offline_enabled,
         password_hash,
@@ -614,6 +628,7 @@ async function listSqliteOfflineAuthRecords() {
         role,
         company_id,
         company_name,
+        account_expires_at,
         is_active,
         offline_enabled,
         password_hash,
@@ -649,6 +664,7 @@ async function upsertSqliteOfflineAuthRecord(record: OfflineAuthRecord) {
         role,
         company_id,
         company_name,
+        account_expires_at,
         is_active,
         offline_enabled,
         password_hash,
@@ -665,13 +681,14 @@ async function upsertSqliteOfflineAuthRecord(record: OfflineAuthRecord) {
         pending_sync,
         sync_action,
         deleted_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(email) DO UPDATE SET
         id = excluded.id,
         name = excluded.name,
         role = excluded.role,
         company_id = excluded.company_id,
         company_name = excluded.company_name,
+        account_expires_at = excluded.account_expires_at,
         is_active = excluded.is_active,
         offline_enabled = excluded.offline_enabled,
         password_hash = excluded.password_hash,
@@ -696,6 +713,7 @@ async function upsertSqliteOfflineAuthRecord(record: OfflineAuthRecord) {
       record.role,
       record.company_id,
       record.company_name,
+      record.account_expires_at,
       record.is_active ? 1 : 0,
       record.offline_enabled ? 1 : 0,
       record.password_hash,
@@ -739,6 +757,7 @@ async function ensureSqliteDefaultAdminSeeded() {
         role,
         company_id,
         company_name,
+        account_expires_at,
         is_active,
         offline_enabled,
         password_hash,
@@ -836,6 +855,7 @@ async function ensureSqliteAuthSchema() {
   await addColumnIfMissing("display_password", "TEXT NOT NULL DEFAULT ''");
   await addColumnIfMissing("phone", "TEXT NOT NULL DEFAULT ''");
   await addColumnIfMissing("phone_normalized", "TEXT NOT NULL DEFAULT ''");
+  await addColumnIfMissing("account_expires_at", "TEXT");
   await addColumnIfMissing("sync_action", "TEXT NOT NULL DEFAULT 'none'");
   await addColumnIfMissing("deleted_at", "TEXT");
 }
@@ -896,7 +916,7 @@ async function getLocalStorageOfflineAuthRecordByPhone(phone: string) {
   return (
     readLocalStorageRecords().find(
       (record) =>
-        record.role === "employe" && !record.deleted_at && record.phone_normalized === phoneKey,
+        !record.deleted_at && record.phone_normalized === phoneKey,
     ) ?? null
   );
 }
@@ -950,7 +970,7 @@ async function getOfflineAuthRecordByPhone(phone: string) {
     return (
       (await listSqliteOfflineAuthRecords()).find(
         (record) =>
-          record.role === "employe" && !record.deleted_at && record.phone_normalized === phoneKey,
+          !record.deleted_at && record.phone_normalized === phoneKey,
       ) ?? null
     );
   }
@@ -1053,6 +1073,14 @@ async function verifyOfflineAuthRecord(
 
   if (!record.is_active) {
     return { status: "inactive" };
+  }
+
+  if (record.company_id && record.account_expires_at) {
+    const accountExpiresAt = Date.parse(record.account_expires_at);
+
+    if (Number.isFinite(accountExpiresAt) && accountExpiresAt <= Date.now()) {
+      return { status: "expired" };
+    }
   }
 
   if (!record.offline_enabled || record.password_hash.trim().length === 0) {

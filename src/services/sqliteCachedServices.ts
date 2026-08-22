@@ -87,7 +87,6 @@ export const LEGACY_BUSINESS_LOCAL_STORAGE_KEYS = [
   KEYS.localUsers,
   KEYS.offlineCredentials,
   KEYS.smtpPassword,
-  KEYS.licenseState,
 ] as const;
 
 interface ClientRow extends SqliteRow {
@@ -189,6 +188,7 @@ interface LegacyLocalUserRecord {
   role?: unknown;
   company_id?: unknown;
   company_name?: unknown;
+  account_expires_at?: unknown;
   is_active?: unknown;
   offline_enabled?: unknown;
   password_hash?: unknown;
@@ -207,36 +207,6 @@ interface LegacyLocalUserRecord {
   deleted_at?: unknown;
 }
 
-interface LegacyLicenseState {
-  id?: unknown;
-  license_key_hash?: unknown;
-  licenseKeyHash?: unknown;
-  license_token?: unknown;
-  licenseToken?: unknown;
-  device_id?: unknown;
-  deviceId?: unknown;
-  license_status?: unknown;
-  licenseStatus?: unknown;
-  company_id?: unknown;
-  companyId?: unknown;
-  company_name?: unknown;
-  companyName?: unknown;
-  customer_name?: unknown;
-  customerName?: unknown;
-  activated_at?: unknown;
-  activatedAt?: unknown;
-  expires_at?: unknown;
-  expiresAt?: unknown;
-  last_checked_at?: unknown;
-  lastCheckedAt?: unknown;
-  last_validated_at?: unknown;
-  lastValidatedAt?: unknown;
-  created_at?: unknown;
-  createdAt?: unknown;
-  updated_at?: unknown;
-  updatedAt?: unknown;
-}
-
 interface LocalStorageMigrationSnapshot {
   clients: Client[];
   payments: Payment[];
@@ -244,7 +214,6 @@ interface LocalStorageMigrationSnapshot {
   logs: ActivityLog[];
   notifications: NotificationItem[];
   localUsers: LegacyLocalUserRecord[];
-  licenseState: LegacyLicenseState | null;
   smtpPassword: string | null;
   lastSync: string | null;
 }
@@ -260,7 +229,6 @@ export interface LocalStorageMigrationStatus {
     activityLogs: number;
     notifications: number;
     localUsers: number;
-    licenseState: number;
     smtpPassword: number;
     lastSync: number;
   };
@@ -710,18 +678,6 @@ function readOptionalString(value: unknown) {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
-function readRecordValue(record: Partial<Record<string, unknown>>, ...keys: string[]) {
-  for (const key of keys) {
-    const value = record[key];
-
-    if (value !== undefined) {
-      return value;
-    }
-  }
-
-  return undefined;
-}
-
 function isNonEmptyArrayKey(key: string) {
   return localStorageJson<unknown[]>(key, []).length > 0;
 }
@@ -774,11 +730,6 @@ function hasLegacyLocalStorageValue(key: string) {
     return readOptionalString(localStorageJson<unknown>(key, null)) !== null;
   }
 
-  if (key === KEYS.licenseState) {
-    const licenseState = localStorageJson<Record<string, unknown> | null>(key, null);
-    return licenseState !== null && Object.keys(licenseState).length > 0;
-  }
-
   return false;
 }
 
@@ -815,7 +766,6 @@ function readLocalStorageMigrationSnapshot(): LocalStorageMigrationSnapshot {
     logs: localStorageJson<ActivityLog[]>(KEYS.logs, []),
     notifications: localStorageJson<NotificationItem[]>(KEYS.notifications, []),
     localUsers: Array.from(usersByEmail.values()),
-    licenseState: localStorageJson<LegacyLicenseState | null>(KEYS.licenseState, null),
     smtpPassword: readOptionalString(localStorageJson<unknown>(KEYS.smtpPassword, null)),
     lastSync: localStorageLastSync(),
   };
@@ -829,7 +779,6 @@ function getMigrationCounts(snapshot: LocalStorageMigrationSnapshot) {
     activityLogs: snapshot.logs.length,
     notifications: snapshot.notifications.length,
     localUsers: snapshot.localUsers.length,
-    licenseState: snapshot.licenseState ? 1 : 0,
     smtpPassword: snapshot.smtpPassword ? 1 : 0,
     lastSync: snapshot.lastSync ? 1 : 0,
   };
@@ -1192,6 +1141,7 @@ function normalizeLegacyUser(record: LegacyLocalUserRecord) {
     role,
     company_id: readNullableString(record.company_id),
     company_name: readNullableString(record.company_name),
+    account_expires_at: readNullableString(record.account_expires_at),
     is_active: readBoolean(record.is_active, true),
     offline_enabled: readBoolean(record.offline_enabled, passwordHash.length > 0),
     password_hash: passwordHash,
@@ -1230,6 +1180,7 @@ async function upsertLocalUsers(records: LegacyLocalUserRecord[]) {
           role,
           company_id,
           company_name,
+          account_expires_at,
           is_active,
           offline_enabled,
           password_hash,
@@ -1246,13 +1197,14 @@ async function upsertLocalUsers(records: LegacyLocalUserRecord[]) {
           pending_sync,
           sync_action,
           deleted_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(email) DO UPDATE SET
           id = excluded.id,
           name = excluded.name,
           role = excluded.role,
           company_id = excluded.company_id,
           company_name = excluded.company_name,
+          account_expires_at = excluded.account_expires_at,
           is_active = excluded.is_active,
           offline_enabled = excluded.offline_enabled,
           password_hash = excluded.password_hash,
@@ -1277,6 +1229,7 @@ async function upsertLocalUsers(records: LegacyLocalUserRecord[]) {
         user.role,
         user.company_id,
         user.company_name,
+        user.account_expires_at,
         user.is_active ? 1 : 0,
         user.offline_enabled ? 1 : 0,
         user.password_hash,
@@ -1296,78 +1249,6 @@ async function upsertLocalUsers(records: LegacyLocalUserRecord[]) {
       ],
     );
   }
-}
-
-function normalizeLicenseStatus(value: unknown) {
-  return value === "active" ||
-    value === "expired" ||
-    value === "revoked" ||
-    value === "suspended"
-    ? value
-    : "invalid";
-}
-
-function readLicenseValue(record: LegacyLicenseState, ...keys: string[]) {
-  return readRecordValue(record as Partial<Record<string, unknown>>, ...keys);
-}
-
-async function upsertLicenseState(record: LegacyLicenseState | null) {
-  if (!record) {
-    return;
-  }
-
-  const now = new Date().toISOString();
-  const db = await getDb();
-  await db.execute(
-    `
-      INSERT INTO license_state (
-        id,
-        license_key_hash,
-        license_token,
-        device_id,
-        license_status,
-        company_id,
-        company_name,
-        customer_name,
-        activated_at,
-        expires_at,
-        last_checked_at,
-        last_validated_at,
-        created_at,
-        updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        license_key_hash = excluded.license_key_hash,
-        license_token = excluded.license_token,
-        device_id = excluded.device_id,
-        license_status = excluded.license_status,
-        company_id = excluded.company_id,
-        company_name = excluded.company_name,
-        customer_name = excluded.customer_name,
-        activated_at = excluded.activated_at,
-        expires_at = excluded.expires_at,
-        last_checked_at = excluded.last_checked_at,
-        last_validated_at = excluded.last_validated_at,
-        created_at = excluded.created_at,
-        updated_at = excluded.updated_at
-    `,
-    [
-      readString(readLicenseValue(record, "id"), "primary"),
-      readString(readLicenseValue(record, "license_key_hash", "licenseKeyHash")),
-      readString(readLicenseValue(record, "license_token", "licenseToken")),
-      readString(readLicenseValue(record, "device_id", "deviceId")),
-      normalizeLicenseStatus(readLicenseValue(record, "license_status", "licenseStatus")),
-      readNullableString(readLicenseValue(record, "company_id", "companyId")),
-      readNullableString(readLicenseValue(record, "company_name", "companyName")),
-      readNullableString(readLicenseValue(record, "customer_name", "customerName")),
-      readString(readLicenseValue(record, "activated_at", "activatedAt"), now),
-      readNullableString(readLicenseValue(record, "expires_at", "expiresAt")),
-      readNullableString(readLicenseValue(record, "last_checked_at", "lastCheckedAt")),
-      readNullableString(readLicenseValue(record, "last_validated_at", "lastValidatedAt")),
-      readString(readLicenseValue(record, "created_at", "createdAt"), now),
-      readString(readLicenseValue(record, "updated_at", "updatedAt"), now),
-    ],
-  );
 }
 
 async function writeAppStateValue(key: string, value: string | null) {
@@ -1424,8 +1305,6 @@ async function importLocalStorageSnapshotToSqlite() {
     await upsertLogs(snapshot.logs);
     await upsertNotifications(snapshot.notifications);
     await upsertLocalUsers(snapshot.localUsers);
-    await upsertLicenseState(snapshot.licenseState);
-
     if (snapshot.smtpPassword) {
       await writeAppStateValue("smtp_password", snapshot.smtpPassword);
     }
@@ -1494,7 +1373,6 @@ export async function getSqliteStorageDiagnostics(): Promise<StorageDiagnostics>
     "activity_logs",
     "notification_queue",
     "local_users",
-    "license_state",
     "app_state",
   ];
   const counts = await Promise.all(tableNames.map((tableName) => getTableCount(tableName)));

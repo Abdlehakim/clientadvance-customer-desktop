@@ -19,20 +19,14 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import {
   getAdminSettings,
-  getLicenseAccessSnapshot,
   getCurrentUser,
   getLastSync,
-  LICENSE_ACTIVATED_SUCCESS_MESSAGE,
-  LICENSE_ACTIVATION_FAILED_MESSAGE,
-  LICENSE_OFFLINE_ACTIVE_MESSAGE,
   getNotifications,
   getPendingCount,
   isOnline,
   logout,
-  refreshLicenseState,
   syncPendingData,
   formatDateTimeFR,
-  activateLicense,
 } from "@/lib/data";
 import { BACKEND_SYNC_DISABLED_MESSAGE } from "@/infrastructure/local/adminSettingsState";
 import { useAppData } from "@/lib/useAppData";
@@ -40,14 +34,9 @@ import {
   deliverQueuedNotifications,
   isNotificationDeliveryDeferred,
 } from "@/services/notificationDeliveryScheduler";
-import {
-  LICENSE_STATE_CHANGE_EVENT,
-  type LicenseAccessSnapshot,
-} from "@/services/licenseService";
 import { initializeStorageDriver } from "@/services/appServices";
 import { useHasMounted } from "@/hooks/useHasMounted";
 import { InitialAdminSetupDialog } from "./InitialAdminSetupDialog";
-import { LicenseActivationScreen } from "./LicenseActivationScreen";
 import { NotificationsDrawer } from "./NotificationsDrawer";
 
 const allItems = [
@@ -70,8 +59,6 @@ interface AppLayoutSessionCache {
   userSessionKey: string | null;
   isStorageReady: boolean;
   setupCompletedInSession: boolean;
-  licenseSnapshot: LicenseAccessSnapshot | null;
-  licenseMessage: string;
 }
 
 interface UserSessionKeySource {
@@ -80,16 +67,12 @@ interface UserSessionKeySource {
 }
 
 let activeSyncPromise: Promise<void> | null = null;
-const IS_DEV = import.meta.env.DEV;
-let hasShownOfflineLicenseToastThisSession = false;
 
 function createEmptySessionCache(): AppLayoutSessionCache {
   return {
     userSessionKey: null,
     isStorageReady: false,
     setupCompletedInSession: false,
-    licenseSnapshot: null,
-    licenseMessage: "",
   };
 }
 
@@ -150,18 +133,10 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   const [setupCompletedInSession, setSetupCompletedInSession] = useState(
     initialSessionCache.setupCompletedInSession,
   );
-  const [licenseSnapshot, setLicenseSnapshot] = useState<LicenseAccessSnapshot | null>(
-    initialSessionCache.licenseSnapshot,
-  );
-  const [licenseMessage, setLicenseMessage] = useState(initialSessionCache.licenseMessage);
-  const [isLicenseLoading, setIsLicenseLoading] = useState(false);
-  const [isLicenseActivating, setIsLicenseActivating] = useState(false);
   const isNavigatingToLoginRef = useRef(false);
   const previousOnlineRef = useRef<boolean | null>(null);
   const autoSyncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const desktopDeliveryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const licenseBackgroundCheckIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const licenseRefreshInFlightRef = useRef(false);
   const lastDesktopDeliverySignatureRef = useRef<string | null>(null);
 
   const user = mounted ? getCurrentUser() : null;
@@ -186,15 +161,6 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
     if (!user) {
       setIsStorageReady(false);
       setSetupCompletedInSession(false);
-      setLicenseSnapshot(null);
-      setLicenseMessage("");
-      setIsLicenseLoading(false);
-      setIsLicenseActivating(false);
-      licenseRefreshInFlightRef.current = false;
-      if (licenseBackgroundCheckIntervalRef.current !== null) {
-        clearInterval(licenseBackgroundCheckIntervalRef.current);
-        licenseBackgroundCheckIntervalRef.current = null;
-      }
       return;
     }
 
@@ -233,194 +199,6 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   ]);
 
   useEffect(() => {
-    if (!mounted || !user || !isStorageReady) {
-      setLicenseSnapshot(null);
-      setLicenseMessage("");
-      setIsLicenseLoading(false);
-      return;
-    }
-
-    let cancelled = false;
-
-    setIsLicenseLoading(true);
-
-    void getLicenseAccessSnapshot()
-      .then((snapshot) => {
-        if (cancelled) {
-          return;
-        }
-
-        setLicenseSnapshot(snapshot);
-        setLicenseMessage(snapshot.message);
-      })
-      .catch((error) => {
-        console.error("License check failed.", error);
-        const message =
-          error instanceof Error && error.message.trim().length > 0
-            ? error.message
-            : LICENSE_ACTIVATION_FAILED_MESSAGE;
-
-        if (cancelled) {
-          return;
-        }
-
-        setLicenseSnapshot({
-          state: null,
-          status: "missing",
-          requiresActivation: true,
-          message,
-          offlineActive: false,
-          isDevBypass: false,
-        });
-        setLicenseMessage(message);
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setIsLicenseLoading(false);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [isStorageReady, mounted, user?.id]);
-
-  useEffect(() => {
-    if (!user || hasShownOfflineLicenseToastThisSession) {
-      return;
-    }
-
-    if (licenseSnapshot?.status === "active" && licenseSnapshot.offlineActive) {
-      toast(LICENSE_OFFLINE_ACTIVE_MESSAGE);
-      hasShownOfflineLicenseToastThisSession = true;
-    }
-  }, [licenseSnapshot?.offlineActive, licenseSnapshot?.status, user]);
-
-  useEffect(() => {
-    if (!mounted || !user || !isStorageReady || typeof window === "undefined") {
-      return;
-    }
-
-    let cancelled = false;
-
-    const syncLicenseSnapshot = () => {
-      void getLicenseAccessSnapshot()
-        .then((snapshot) => {
-          if (cancelled) {
-            return;
-          }
-
-          setLicenseSnapshot(snapshot);
-          setLicenseMessage(snapshot.message);
-        })
-        .catch((error) => {
-          if (!cancelled) {
-            console.error("License state refresh failed.", error);
-          }
-        });
-    };
-
-    window.addEventListener(LICENSE_STATE_CHANGE_EVENT, syncLicenseSnapshot);
-
-    return () => {
-      cancelled = true;
-      window.removeEventListener(LICENSE_STATE_CHANGE_EVENT, syncLicenseSnapshot);
-    };
-  }, [isStorageReady, mounted, user?.id]);
-
-  useEffect(() => {
-    if (
-      !mounted ||
-      !user ||
-      !isStorageReady ||
-      !online ||
-      !licenseSnapshot ||
-      licenseSnapshot.isDevBypass
-    ) {
-      if (licenseBackgroundCheckIntervalRef.current !== null) {
-        clearInterval(licenseBackgroundCheckIntervalRef.current);
-        licenseBackgroundCheckIntervalRef.current = null;
-      }
-
-      return;
-    }
-
-    const storedState = licenseSnapshot.state;
-
-    if (!storedState || storedState.license_token.trim().length === 0) {
-      if (licenseBackgroundCheckIntervalRef.current !== null) {
-        clearInterval(licenseBackgroundCheckIntervalRef.current);
-        licenseBackgroundCheckIntervalRef.current = null;
-      }
-
-      return;
-    }
-
-    let cancelled = false;
-
-    const runBackgroundLicenseCheck = () => {
-      if (licenseRefreshInFlightRef.current) {
-        return;
-      }
-
-      licenseRefreshInFlightRef.current = true;
-
-      void refreshLicenseState()
-        .then((snapshot) => {
-          if (cancelled) {
-            return;
-          }
-
-          setLicenseSnapshot(snapshot);
-          setLicenseMessage(snapshot.message);
-
-          if (
-            licenseSnapshot.status === "active" &&
-            snapshot.requiresActivation &&
-            snapshot.message.trim().length > 0
-          ) {
-            toast.error(snapshot.message);
-          }
-        })
-        .catch((error) => {
-          if (!cancelled) {
-            console.error("Background license refresh failed.", error);
-          }
-        })
-        .finally(() => {
-          licenseRefreshInFlightRef.current = false;
-        });
-    };
-
-    runBackgroundLicenseCheck();
-
-    if (licenseBackgroundCheckIntervalRef.current !== null) {
-      clearInterval(licenseBackgroundCheckIntervalRef.current);
-    }
-
-    licenseBackgroundCheckIntervalRef.current = setInterval(
-      runBackgroundLicenseCheck,
-      24 * 60 * 60 * 1000,
-    );
-
-    return () => {
-      cancelled = true;
-
-      if (licenseBackgroundCheckIntervalRef.current !== null) {
-        clearInterval(licenseBackgroundCheckIntervalRef.current);
-        licenseBackgroundCheckIntervalRef.current = null;
-      }
-    };
-  }, [
-    isStorageReady,
-    licenseSnapshot?.isDevBypass,
-    licenseSnapshot?.state?.license_token,
-    mounted,
-    online,
-    user?.id,
-  ]);
-
-  useEffect(() => {
     if (!mounted || !userSessionKey) {
       return;
     }
@@ -429,67 +207,16 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
       userSessionKey,
       isStorageReady,
       setupCompletedInSession,
-      licenseSnapshot,
-      licenseMessage,
     };
   }, [
     isStorageReady,
-    licenseMessage,
-    licenseSnapshot,
     mounted,
     setupCompletedInSession,
     userSessionKey,
   ]);
 
   const canReadAppState = mounted && !!user && isStorageReady;
-  const isLicenseKnown = licenseSnapshot !== null;
-  const isLicenseUnlocked = Boolean(licenseSnapshot && !licenseSnapshot.requiresActivation);
-  const shouldRenderProtectedApp =
-    canReadAppState && isLicenseKnown && !isLicenseLoading && isLicenseUnlocked;
-
-  const onActivateAppLicense = async (input: {
-    licenseKey: string;
-    customerName?: string;
-  }) => {
-    setIsLicenseActivating(true);
-
-    try {
-      await activateLicense(input);
-      const refreshedSnapshot = await getLicenseAccessSnapshot();
-
-      if (IS_DEV) {
-        console.info("[license] activation unlocked", {
-          status: refreshedSnapshot.status,
-          requiresActivation: refreshedSnapshot.requiresActivation,
-          offlineActive: refreshedSnapshot.offlineActive,
-          hasState: Boolean(refreshedSnapshot.state),
-        });
-      }
-
-      setLicenseSnapshot(refreshedSnapshot);
-      setLicenseMessage(
-        refreshedSnapshot.message || LICENSE_ACTIVATED_SUCCESS_MESSAGE,
-      );
-      toast.success(LICENSE_ACTIVATED_SUCCESS_MESSAGE);
-    } catch (error) {
-      const message =
-        error instanceof Error && error.message.trim().length > 0
-          ? error.message
-          : LICENSE_ACTIVATION_FAILED_MESSAGE;
-
-      setLicenseMessage(message);
-      toast.error(message);
-
-      try {
-        const nextSnapshot = await getLicenseAccessSnapshot();
-        setLicenseSnapshot(nextSnapshot);
-      } catch (snapshotError) {
-        console.error("License snapshot refresh failed.", snapshotError);
-      }
-    } finally {
-      setIsLicenseActivating(false);
-    }
-  };
+  const shouldRenderProtectedApp = canReadAppState;
 
   const isAdminUser = user?.role === "admin";
   const items = allItems.filter((item) => {
@@ -693,10 +420,6 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
     return () => {
       clearAutoSyncTimeout();
       clearDesktopDeliveryTimeout();
-      if (licenseBackgroundCheckIntervalRef.current !== null) {
-        clearInterval(licenseBackgroundCheckIntervalRef.current);
-        licenseBackgroundCheckIntervalRef.current = null;
-      }
     };
   }, []);
 
@@ -708,19 +431,8 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
     return <div className="h-screen w-full overflow-hidden bg-background" />;
   }
 
-  if (!isStorageReady || !licenseSnapshot) {
+  if (!isStorageReady) {
     return <AppLayoutBootScreen />;
-  }
-
-  if (licenseSnapshot.requiresActivation) {
-    return (
-      <LicenseActivationScreen
-        isActivating={isLicenseActivating}
-        isOnline={online}
-        message={licenseMessage}
-        onActivate={onActivateAppLicense}
-      />
-    );
   }
 
   if (!settings) {
