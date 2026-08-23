@@ -12,6 +12,8 @@ import {
   RefreshCw,
   Bell,
   CircleUserRound,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -187,6 +189,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate();
   const path = useRouterState({ select: (state) => state.location.pathname });
   const [notifOpen, setNotifOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const initialUser = mounted ? getCurrentUser() : null;
   const initialUserSessionKey = getUserSessionKey(initialUser);
   const initialSessionCache = readAppLayoutSessionCache(initialUserSessionKey);
@@ -533,15 +536,27 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="flex h-screen w-full overflow-hidden bg-background">
-      <aside className="flex h-screen w-64 shrink-0 flex-col overflow-hidden bg-sidebar text-sidebar-foreground">
-        <div className="flex h-16 items-center gap-2 border-b border-sidebar-border px-5">
+      <aside
+        className={cn(
+          "flex h-screen shrink-0 flex-col overflow-hidden bg-sidebar text-sidebar-foreground transition-[width]",
+          sidebarCollapsed ? "w-20" : "w-64",
+        )}
+      >
+        <div
+          className={cn(
+            "flex h-16 items-center border-b border-sidebar-border",
+            sidebarCollapsed ? "justify-center px-3" : "gap-2 px-5",
+          )}
+        >
           <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-sidebar-primary font-bold text-sidebar-primary-foreground">
             G
           </div>
-          <div>
-            <div className="text-sm font-semibold leading-tight">ClientAdvans</div>
-            <div className="text-xs leading-tight opacity-70">& Paiements</div>
-          </div>
+          {!sidebarCollapsed && (
+            <div>
+              <div className="text-sm font-semibold leading-tight">ClientAdvans</div>
+              <div className="text-xs leading-tight opacity-70">& Paiements</div>
+            </div>
+          )}
         </div>
         <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto p-3">
           {items.map((item) => {
@@ -551,15 +566,24 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
               <Link
                 key={item.to}
                 to={item.to}
+                aria-label={item.label}
+                title={sidebarCollapsed ? item.label : undefined}
                 className={cn(
-                  "flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors",
+                  "flex items-center rounded-md py-2 text-sm transition-colors",
+                  sidebarCollapsed
+                    ? "justify-center px-2"
+                    : "gap-3 px-3",
                   active
                     ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
                     : "text-sidebar-foreground/80 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground",
                 )}
               >
-                <Icon className="h-4 w-4" />
-                {item.label}
+                <Icon className="h-4 w-4 shrink-0" />
+                {sidebarCollapsed ? (
+                  <span className="sr-only">{item.label}</span>
+                ) : (
+                  item.label
+                )}
               </Link>
             );
           })}
@@ -569,6 +593,29 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
       <div className="flex h-screen min-w-0 flex-1 flex-col overflow-hidden">
         <header className="flex h-16 shrink-0 items-center justify-between border-b bg-card px-6">
           <div className="flex items-center gap-3">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-8 w-8 p-0"
+              onClick={() => setSidebarCollapsed((value) => !value)}
+              aria-label={
+                sidebarCollapsed
+                  ? "Déployer la navigation"
+                  : "Réduire la navigation"
+              }
+              title={
+                sidebarCollapsed
+                  ? "Déployer la navigation"
+                  : "Réduire la navigation"
+              }
+            >
+              {sidebarCollapsed ? (
+                <PanelLeftOpen className="h-5 w-5" />
+              ) : (
+                <PanelLeftClose className="h-5 w-5" />
+              )}
+            </Button>
             <Badge
               variant="outline"
               className={
