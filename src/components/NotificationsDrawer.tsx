@@ -83,7 +83,7 @@ export function NotificationsDrawer({
       toast.error(
         error instanceof Error
           ? error.message
-          : "Impossible d'effacer les notifications envoyées.",
+          : "Impossible d'Effacer les notification.",
       );
     } finally {
       setIsClearingSent(false);
@@ -132,7 +132,7 @@ export function NotificationsDrawer({
               >
                 {isClearingSent
                   ? "Effacement..."
-                  : "Effacer les notifications envoyées"}
+                  : "Effacer les notification"}
               </Button>
             ) : null}
           </div>
