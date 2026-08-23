@@ -430,15 +430,12 @@ export function AdminSettingsFormCard({
         ) : null}
 
         {showSmtpSettings ? (
-          <div className="space-y-4 rounded-lg border bg-muted/30 p-4">
-            <div>
-              <h4 className="font-medium">Paramètres email SMTP</h4>
-              <p className="mt-1 text-sm text-muted-foreground">
-                {isWithoutServerMode
-                  ? "Le mode sans serveur utilise l'envoi email direct depuis l'application."
-                  : "En mode avec serveur, ces paramètres restent disponibles si vous activez plus tard l'envoi direct."}
-              </p>
-            </div>
+          <div className="space-y-5">
+            <p className="text-sm text-muted-foreground">
+              {isWithoutServerMode
+                ? "Le mode sans serveur utilise l'envoi email direct depuis l'application."
+                : "En mode avec serveur, ces paramètres restent disponibles si vous activez plus tard l'envoi direct."}
+            </p>
 
             <div className="space-y-1.5">
               <Label>Type de compte email</Label>
@@ -560,7 +557,7 @@ export function AdminSettingsFormCard({
               </div>
             </div>
 
-            <div className="flex items-center justify-between rounded-md border bg-background px-3 py-2">
+            <div className="flex items-center justify-between border-t pt-4">
               <div>
                 <div className="text-sm font-medium">Connexion SMTP sécurisée</div>
                 <div className="text-xs text-muted-foreground">

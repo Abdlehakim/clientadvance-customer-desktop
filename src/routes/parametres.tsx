@@ -79,7 +79,7 @@ function SettingsPage() {
           <AdminSettingsFormCard
             settings={settings}
             actionButtonClassName={SETTINGS_ACTION_BUTTON_CLASS}
-            title="Paramètres email SMTP"
+            title="Configuration SMTP"
             sections={["smtp"]}
             showSmtpTestButton
             showSmtpPasswordToggle
