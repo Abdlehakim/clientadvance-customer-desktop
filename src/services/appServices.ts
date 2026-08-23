@@ -37,6 +37,7 @@ import {
 import { sendDesktopEmail } from "@/infrastructure/local/sqlite/desktopEmailClient";
 import { getStoredSmtpPassword } from "@/infrastructure/local/smtpPasswordStorage";
 import { apiFetch, ApiError } from "@/infrastructure/remote/apiClient";
+import { getFriendlySmtpErrorMessage } from "@/lib/smtpErrorMessage";
 import {
   authRemoteRepository,
   isRemoteAuthOfflineSession,
@@ -159,8 +160,6 @@ const MISSING_SMTP_TEST_MESSAGE =
 const MISSING_SMTP_PASSWORD_MESSAGE = "Mot de passe SMTP manquant.";
 const GMAIL_SMTP_HOST = "smtp.gmail.com";
 const GMAIL_SMTP_PORT = 587;
-const GMAIL_APP_PASSWORD_HINT =
-  "Pour Gmail, utilisez un mot de passe d'application, pas le mot de passe normal du compte Gmail.";
 
 export const getCurrentUser = () => authService.getCurrentUser();
 export const login = (identifier: string, password: string) =>
@@ -381,30 +380,6 @@ interface SmtpTestInput {
   smtpFromName: string;
 }
 
-function decorateSmtpTestError(message: string, smtpProviderType: SmtpProviderType) {
-  if (
-    smtpProviderType === "gmail" &&
-    /(auth|authentication|credential|password|username|535)/i.test(message) &&
-    !message.includes(GMAIL_APP_PASSWORD_HINT)
-  ) {
-    return `${message} ${GMAIL_APP_PASSWORD_HINT}`;
-  }
-
-  return message;
-}
-
-function getErrorMessage(error: unknown) {
-  if (error instanceof Error && error.message.trim().length > 0) {
-    return error.message;
-  }
-
-  if (typeof error === "string" && error.trim().length > 0) {
-    return error;
-  }
-
-  return "Erreur inconnue";
-}
-
 export async function testAdminSmtpEmail(input: SmtpTestInput) {
   if (!isAdmin(getCurrentUser())) {
     throw new Error("Accès refusé. Cette section est réservée à l'administrateur.");
@@ -454,8 +429,10 @@ export async function testAdminSmtpEmail(input: SmtpTestInput) {
       body: SMTP_TEST_BODY,
     });
   } catch (error) {
+    console.error("SMTP test email failed.", error);
+
     throw new Error(
-      decorateSmtpTestError(getErrorMessage(error), input.smtpProviderType),
+      getFriendlySmtpErrorMessage(error, input.smtpProviderType),
     );
   }
 }

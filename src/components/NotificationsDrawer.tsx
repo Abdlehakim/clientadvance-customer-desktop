@@ -11,6 +11,7 @@ import {
   getCurrentUser,
   getNotifications,
 } from "@/lib/data";
+import { getFriendlySmtpErrorMessage } from "@/lib/smtpErrorMessage";
 import { deliverNotificationById } from "@/services/notificationDeliveryService";
 
 function statusLabel(status?: string) {
@@ -102,9 +103,8 @@ export function NotificationsDrawer({
         toast.success("Notification email envoyée.");
       } else if (result.status === "failed") {
         toast.error(
-          result.errorMessage
-            ? `Échec d'envoi email : ${result.errorMessage}`
-            : "Échec d'envoi email.",
+          result.errorMessage ??
+            "L’envoi de l’email a échoué. Vérifiez les paramètres email puis réessayez.",
         );
       } else if (result.offline) {
         toast("Notification en attente. Elle sera envoyée lorsque la connexion sera disponible.");
@@ -190,7 +190,10 @@ export function NotificationsDrawer({
                     notification.status === "failed" &&
                     notification.error_message ? (
                       <p className="mt-2 text-xs text-destructive">
-                        {notification.error_message}
+                        {getFriendlySmtpErrorMessage(
+                          notification.error_message,
+                          settings.smtp_provider_type,
+                        )}
                       </p>
                     ) : null}
                     {isEmail && notification.status === "failed" ? (

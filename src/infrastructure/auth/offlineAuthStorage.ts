@@ -1075,10 +1075,22 @@ async function verifyOfflineAuthRecord(
     return { status: "inactive" };
   }
 
-  if (record.company_id && record.account_expires_at) {
+  if (!record.seeded) {
+    if (!record.last_online_login_at) {
+      return { status: "missing" };
+    }
+
+    const lastOnlineLoginAt = Date.parse(record.last_online_login_at);
+
+    if (!Number.isFinite(lastOnlineLoginAt)) {
+      return { status: "missing" };
+    }
+  }
+
+  if (record.account_expires_at) {
     const accountExpiresAt = Date.parse(record.account_expires_at);
 
-    if (Number.isFinite(accountExpiresAt) && accountExpiresAt <= Date.now()) {
+    if (!Number.isFinite(accountExpiresAt) || accountExpiresAt <= Date.now()) {
       return { status: "expired" };
     }
   }

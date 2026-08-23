@@ -100,17 +100,12 @@ export async function persistRemoteOfflineUserSession(user: User, password: stri
 }
 
 function shouldTryLocalCredentialFallback(error: unknown) {
-  if (!(error instanceof ApiError)) {
-    return false;
-  }
-
-  return error.status === 0 || error.status === 400 || error.status === 401 || error.status >= 500;
+  return error instanceof ApiError && error.status === 0;
 }
 
 export const authRemoteRepository: AuthRepository = {
   async login(identifier, password) {
     const normalizedIdentifier = identifier.trim().toLowerCase();
-    let remoteError: unknown = null;
 
     if (isConnectionOnline()) {
       try {
@@ -136,18 +131,12 @@ export const authRemoteRepository: AuthRepository = {
         if (!shouldTryLocalCredentialFallback(error)) {
           throw error;
         }
-
-        remoteError = error;
       }
     }
 
     const localResult = await authenticateOfflineCredential(normalizedIdentifier, password);
 
     if (localResult.status === "missing") {
-      if (remoteError instanceof ApiError && remoteError.status !== 0) {
-        throw remoteError;
-      }
-
       throw new Error(OFFLINE_LOGIN_UNAVAILABLE_MESSAGE);
     }
 
@@ -161,14 +150,6 @@ export const authRemoteRepository: AuthRepository = {
 
     if (localResult.status === "expired") {
       throw new Error("Compte expiré");
-    }
-
-    if (
-      remoteError instanceof ApiError &&
-      remoteError.status !== 0 &&
-      localResult.user.role !== "employe"
-    ) {
-      throw remoteError;
     }
 
     clearAuthToken();

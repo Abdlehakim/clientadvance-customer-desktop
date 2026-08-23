@@ -7,6 +7,7 @@ import {
 import { getStoredSmtpPassword } from "@/infrastructure/local/smtpPasswordStorage";
 import { sendDesktopEmail } from "@/infrastructure/local/sqlite/desktopEmailClient";
 import { isTauriRuntime } from "@/infrastructure/local/sqlite/sqliteClient";
+import { getFriendlySmtpErrorMessage } from "@/lib/smtpErrorMessage";
 import {
   cleanupOldSentNotifications,
   getAdminSettings,
@@ -22,8 +23,6 @@ const DESKTOP_EMAIL_UNAVAILABLE_MESSAGE =
   "Email direct depuis l'application indisponible hors application desktop.";
 const GMAIL_SMTP_HOST = "smtp.gmail.com";
 const GMAIL_SMTP_PORT = 587;
-const GMAIL_APP_PASSWORD_HINT =
-  "Pour Gmail, utilisez un mot de passe d'application, pas le mot de passe normal du compte Gmail.";
 
 export interface NotificationDeliveryResult {
   mode: NotificationDeliveryMode;
@@ -153,41 +152,6 @@ function resolveDesktopEmailConfig(
   };
 }
 
-function decorateDesktopEmailError(
-  message: string,
-  settings: ReturnType<typeof getAdminSettings>,
-) {
-  if (
-    settings.smtp_provider_type === "gmail" &&
-    /(auth|authentication|credential|password|username|535)/i.test(message) &&
-    !message.includes(GMAIL_APP_PASSWORD_HINT)
-  ) {
-    return `${message} ${GMAIL_APP_PASSWORD_HINT}`;
-  }
-
-  return message;
-}
-
-function getErrorMessage(error: unknown) {
-  if (error instanceof Error && error.message.trim().length > 0) {
-    return error.message;
-  }
-
-  if (typeof error === "string" && error.trim().length > 0) {
-    return error;
-  }
-
-  if (typeof error === "object" && error !== null) {
-    const maybeMessage = Reflect.get(error, "message");
-
-    if (typeof maybeMessage === "string" && maybeMessage.trim().length > 0) {
-      return maybeMessage;
-    }
-  }
-
-  return "Echec d'envoi email";
-}
-
 function emptySingleResult(mode: NotificationDeliveryMode): SingleNotificationDeliveryResult {
   return {
     mode,
@@ -246,7 +210,12 @@ async function deliverDesktopEmailNotification(
     result.status = "sent";
     return result;
   } catch (error) {
-    const message = decorateDesktopEmailError(getErrorMessage(error), settings);
+    console.error("SMTP notification delivery failed.", error);
+
+    const message = getFriendlySmtpErrorMessage(
+      error,
+      settings.smtp_provider_type,
+    );
     await markNotificationAsFailed(notification.id, message);
     result.status = "failed";
     result.errorMessage = message;
