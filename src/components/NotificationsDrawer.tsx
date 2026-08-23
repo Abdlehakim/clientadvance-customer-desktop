@@ -1,9 +1,15 @@
 import { useState } from "react";
-import { Mail, MessageCircle } from "lucide-react";
+import { Mail, MessageCircle, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import {
+  Sheet,
+  SheetClose,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import {
   clearSentNotifications,
   formatDateTimeFR,
@@ -118,23 +124,40 @@ export function NotificationsDrawer({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="w-[440px] sm:max-w-[440px]">
+      <SheetContent
+        className="w-[440px] sm:max-w-[440px]"
+        showCloseButton={false}
+      >
         <SheetHeader>
           <div className="flex items-center justify-between gap-3">
             <SheetTitle>File de notifications</SheetTitle>
-            {isAdminUser ? (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => void onClearSentNotifications()}
-                disabled={isClearingSent || sentCount === 0}
-              >
-                {isClearingSent
-                  ? "Effacement..."
-                  : "Effacer les notification"}
-              </Button>
-            ) : null}
+            <div className="flex items-center gap-2">
+              {isAdminUser ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void onClearSentNotifications()}
+                  disabled={isClearingSent || sentCount === 0}
+                >
+                  {isClearingSent
+                    ? "Effacement..."
+                    : "Effacer les notification"}
+                </Button>
+              ) : null}
+              <SheetClose asChild>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 w-8 p-0"
+                  aria-label="Fermer"
+                  title="Fermer"
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </SheetClose>
+            </div>
           </div>
         </SheetHeader>
         <ScrollArea className="mt-4 h-[calc(100vh-100px)] pr-3">
