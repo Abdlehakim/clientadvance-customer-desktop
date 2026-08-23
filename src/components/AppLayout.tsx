@@ -679,7 +679,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
-            {isAdminUser && (
+            {isAdminUser && backendSyncEnabled && (
               <Button
                 size="sm"
                 onClick={() => void onSync()}
