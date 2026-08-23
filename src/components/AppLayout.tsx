@@ -11,11 +11,20 @@ import {
   WifiOff,
   RefreshCw,
   Bell,
+  CircleUserRound,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import {
   getAdminSettings,
@@ -499,20 +508,6 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
             );
           })}
         </nav>
-        <div className="border-t border-sidebar-border p-3">
-          <div className="mb-2 px-2 text-xs">
-            <div className="font-medium">{user.name}</div>
-            <div className="opacity-60">{getUserRoleDisplayLabel(user.role)}</div>
-          </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="w-full justify-start text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-            onClick={onLogout}
-          >
-            <LogOut className="mr-2 h-4 w-4" /> Se déconnecter
-          </Button>
-        </div>
       </aside>
 
       <div className="flex h-screen min-w-0 flex-1 flex-col overflow-hidden">
@@ -564,6 +559,59 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                 </span>
               )}
             </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 w-8 p-0"
+                  aria-label="Compte connecté"
+                  title="Compte connecté"
+                >
+                  <CircleUserRound className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-72">
+                <DropdownMenuLabel className="font-normal">
+                  <div className="flex flex-col gap-1">
+                    <div className="font-medium leading-none">{user.name}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {getUserRoleDisplayLabel(user.role)}
+                    </div>
+                  </div>
+                </DropdownMenuLabel>
+                <div className="space-y-2 px-2 py-1.5 text-xs">
+                  <div>
+                    <div className="text-muted-foreground">Email</div>
+                    <div className="truncate font-medium">{user.email}</div>
+                  </div>
+                  {typeof user.phone === "string" &&
+                    user.phone.trim().length > 0 && (
+                      <div>
+                        <div className="text-muted-foreground">Téléphone</div>
+                        <div className="truncate font-medium">{user.phone}</div>
+                      </div>
+                    )}
+                  {typeof user.company_name === "string" &&
+                    user.company_name.trim().length > 0 && (
+                      <div>
+                        <div className="text-muted-foreground">Entreprise</div>
+                        <div className="truncate font-medium">
+                          {user.company_name}
+                        </div>
+                      </div>
+                    )}
+                </div>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onSelect={() => void onLogout()}
+                  className="text-destructive focus:text-destructive"
+                >
+                  <LogOut />
+                  Se déconnecter
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             {isAdminUser && (
               <Button
                 size="sm"
