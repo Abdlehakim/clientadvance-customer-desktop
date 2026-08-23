@@ -601,6 +601,16 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                         </div>
                       </div>
                     )}
+                  <div>
+                    <div className="text-muted-foreground">
+                      Expiration du compte
+                    </div>
+                    <div className="font-medium">
+                      {user.account_expires_at
+                        ? formatDateTimeFR(user.account_expires_at).date
+                        : "À vie"}
+                    </div>
+                  </div>
                 </div>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
