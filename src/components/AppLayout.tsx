@@ -110,6 +110,58 @@ function getUserRoleDisplayLabel(role: string | null | undefined) {
   return role ?? "";
 }
 
+function getAccountExpirationDisplay(
+  accountExpiresAt: string | null | undefined,
+) {
+  if (!accountExpiresAt) {
+    return {
+      date: "À vie",
+      remaining: "Aucune expiration",
+    };
+  }
+
+  const expirationDate = new Date(accountExpiresAt);
+
+  if (Number.isNaN(expirationDate.getTime())) {
+    return {
+      date: "Date invalide",
+      remaining: "",
+    };
+  }
+
+  const today = new Date();
+  const todayStart = new Date(
+    today.getFullYear(),
+    today.getMonth(),
+    today.getDate(),
+  );
+  const expirationStart = new Date(
+    expirationDate.getFullYear(),
+    expirationDate.getMonth(),
+    expirationDate.getDate(),
+  );
+  const daysLeft = Math.ceil(
+    (expirationStart.getTime() - todayStart.getTime()) / 86_400_000,
+  );
+
+  let remaining: string;
+
+  if (daysLeft < 0) {
+    remaining = "Compte expiré";
+  } else if (daysLeft === 0) {
+    remaining = "Expire aujourd’hui";
+  } else if (daysLeft === 1) {
+    remaining = "1 jour restant";
+  } else {
+    remaining = `${daysLeft} jours restants`;
+  }
+
+  return {
+    date: formatDateTimeFR(accountExpiresAt).date,
+    remaining,
+  };
+}
+
 function readAppLayoutSessionCache(userSessionKey: string | null) {
   if (
     userSessionKey &&
@@ -448,6 +500,10 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
     return <AppLayoutBootScreen />;
   }
 
+  const accountExpiration = getAccountExpirationDisplay(
+    user.account_expires_at,
+  );
+
   const onSync = async () => {
     clearAutoSyncTimeout();
 
@@ -605,11 +661,12 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                     <div className="text-muted-foreground">
                       Expiration du compte
                     </div>
-                    <div className="font-medium">
-                      {user.account_expires_at
-                        ? formatDateTimeFR(user.account_expires_at).date
-                        : "À vie"}
-                    </div>
+                    <div className="font-medium">{accountExpiration.date}</div>
+                    {accountExpiration.remaining && (
+                      <div className="mt-0.5 text-xs text-muted-foreground">
+                        {accountExpiration.remaining}
+                      </div>
+                    )}
                   </div>
                 </div>
                 <DropdownMenuSeparator />
