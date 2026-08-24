@@ -111,7 +111,7 @@ jobs:
           SSH_HOST: ${{ secrets.CLIENTADVANCE_RELEASE_SSH_HOST }}
           SSH_PORT: ${{ secrets.CLIENTADVANCE_RELEASE_SSH_PORT }}
           SSH_USER: ${{ secrets.CLIENTADVANCE_RELEASE_SSH_USER }}
-          SSH_PRIVATE_KEY: ${{ secrets.CLIENTADVANCE_RELEASE_SSH_PRIVATE_KEY }}
+          SSH_PRIVATE_KEY_B64: ${{ secrets.CLIENTADVANCE_RELEASE_SSH_PRIVATE_KEY_B64 }}
           SSH_KNOWN_HOSTS: ${{ secrets.CLIENTADVANCE_RELEASE_SSH_KNOWN_HOSTS }}
           SERVER_PATH: ${{ secrets.DESKTOP_RELEASE_SERVER_PATH }}
           PUBLIC_BASE_URL: ${{ secrets.DESKTOP_RELEASE_PUBLIC_BASE_URL }}
@@ -164,7 +164,7 @@ jobs:
             throw "Invalid SSH user configuration."
           }
           if (
-            [string]::IsNullOrWhiteSpace($env:SSH_PRIVATE_KEY) -or
+            [string]::IsNullOrWhiteSpace($env:SSH_PRIVATE_KEY_B64) -or
             [string]::IsNullOrWhiteSpace($env:SSH_KNOWN_HOSTS)
           ) {
             throw "Missing SSH authentication configuration."
@@ -334,7 +334,7 @@ jobs:
           SSH_HOST: ${{ secrets.CLIENTADVANCE_RELEASE_SSH_HOST }}
           SSH_PORT: ${{ secrets.CLIENTADVANCE_RELEASE_SSH_PORT }}
           SSH_USER: ${{ secrets.CLIENTADVANCE_RELEASE_SSH_USER }}
-          SSH_PRIVATE_KEY: ${{ secrets.CLIENTADVANCE_RELEASE_SSH_PRIVATE_KEY }}
+          SSH_PRIVATE_KEY_B64: ${{ secrets.CLIENTADVANCE_RELEASE_SSH_PRIVATE_KEY_B64 }}
           SSH_KNOWN_HOSTS: ${{ secrets.CLIENTADVANCE_RELEASE_SSH_KNOWN_HOSTS }}
           SERVER_PATH: ${{ secrets.DESKTOP_RELEASE_SERVER_PATH }}
         run: |
@@ -344,7 +344,22 @@ jobs:
           $keyPath = Join-Path $sshDirectory "release_key"
           $knownHostsPath = Join-Path $sshDirectory "known_hosts"
           $utf8WithoutBom = [Text.UTF8Encoding]::new($false)
-          [IO.File]::WriteAllText($keyPath, $env:SSH_PRIVATE_KEY, $utf8WithoutBom)
+
+          try {
+            $keyBytes = [Convert]::FromBase64String(
+              $env:SSH_PRIVATE_KEY_B64.Trim()
+            )
+          } catch {
+            throw "Invalid Base64 SSH private key configuration."
+          }
+
+          [IO.File]::WriteAllBytes($keyPath, $keyBytes)
+
+          & ssh-keygen.exe -y -f $keyPath | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            throw "Decoded SSH private key is invalid."
+          }
+
           [IO.File]::WriteAllText($knownHostsPath, $env:SSH_KNOWN_HOSTS, $utf8WithoutBom)
 
           $identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
