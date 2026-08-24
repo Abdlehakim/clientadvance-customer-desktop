@@ -204,7 +204,55 @@ jobs:
 
           Invoke-RestMethod @request | Out-Null
 
+      - name: Validate desktop production API configuration
+        shell: pwsh
+        env:
+          CLIENTADVANCE_DESKTOP_API_URL: ${{ vars.CLIENTADVANCE_DESKTOP_API_URL }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          if ([string]::IsNullOrWhiteSpace($env:CLIENTADVANCE_DESKTOP_API_URL)) {
+            throw "Missing CLIENTADVANCE_DESKTOP_API_URL repository variable."
+          }
+
+          $apiBaseUrl = $env:CLIENTADVANCE_DESKTOP_API_URL.Trim().TrimEnd("/")
+          $apiUri = $null
+
+          if (
+            -not [Uri]::TryCreate($apiBaseUrl, [UriKind]::Absolute, [ref]$apiUri) -or
+            $apiUri.Scheme -ne "https" -or
+            [string]::IsNullOrWhiteSpace($apiUri.Host) -or
+            -not [string]::IsNullOrEmpty($apiUri.UserInfo) -or
+            -not [string]::IsNullOrEmpty($apiUri.Query) -or
+            -not [string]::IsNullOrEmpty($apiUri.Fragment)
+          ) {
+            throw "CLIENTADVANCE_DESKTOP_API_URL must be an absolute HTTPS URL without credentials, query parameters, or a fragment."
+          }
+
+          if ($apiUri.IsLoopback) {
+            throw "CLIENTADVANCE_DESKTOP_API_URL must not use a loopback or local hostname."
+          }
+
+          if (-not $apiUri.AbsolutePath.EndsWith("/api", [StringComparison]::Ordinal)) {
+            throw "CLIENTADVANCE_DESKTOP_API_URL path must end with /api."
+          }
+
+          $healthUrl = "$apiBaseUrl/health"
+          try {
+            $healthResponse = Invoke-WebRequest -Uri $healthUrl -Method Get -TimeoutSec 15
+          } catch {
+            throw "Desktop production API health check failed: $($_.Exception.Message)"
+          }
+
+          if ($healthResponse.StatusCode -lt 200 -or $healthResponse.StatusCode -ge 300) {
+            throw "Desktop production API health check returned HTTP $($healthResponse.StatusCode)."
+          }
+
       - name: Build the Tauri NSIS installer
+        env:
+          VITE_API_BASE_URL: ${{ vars.CLIENTADVANCE_DESKTOP_API_URL }}
+          VITE_USE_LOCAL_AUTH: "false"
+          VITE_STORAGE_DRIVER: "sqlite"
         run: npm run tauri:build
 
       - name: Prepare canonical installer

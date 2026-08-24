@@ -8,7 +8,7 @@ const env = import.meta.env as ImportMetaEnv & {
 };
 const DEVELOPMENT_API_BASE_URL = "http://localhost:4000/api";
 const MISSING_PRODUCTION_API_BASE_URL_MESSAGE =
-  "Missing VITE_API_BASE_URL for production build. Set it to the app-server API URL, for example http://102.204.205.77:4101/api.";
+  "Missing VITE_API_BASE_URL for production build. Set it to the app-server API URL, for example https://api.clientadvance.smartwebify.com/api.";
 
 let authToken: string | null = null;
 

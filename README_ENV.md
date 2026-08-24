@@ -9,7 +9,7 @@ documented here is the customer app-server URL.
 Use this when building the desktop app for the deployed customer API:
 
 ```env
-VITE_API_BASE_URL=http://102.204.205.77:4101/api
+VITE_API_BASE_URL=https://api.clientadvance.smartwebify.com/api
 VITE_USE_LOCAL_AUTH=false
 VITE_STORAGE_DRIVER=sqlite
 ```
@@ -34,9 +34,18 @@ In development builds only, missing `VITE_API_BASE_URL` falls back to
 
 | Variable | Required for production | Production value | Local development value |
 | --- | --- | --- | --- |
-| `VITE_API_BASE_URL` | Yes | `http://102.204.205.77:4101/api` | `http://localhost:4000/api` |
+| `VITE_API_BASE_URL` | Yes | `https://api.clientadvance.smartwebify.com/api` | `http://localhost:4000/api` |
 | `VITE_USE_LOCAL_AUTH` | Yes | `false` | `false` |
 | `VITE_STORAGE_DRIVER` | Recommended for desktop | `sqlite` | `sqlite` |
+
+## GitHub Actions Production Release
+
+Configure the repository variable `CLIENTADVANCE_DESKTOP_API_URL` with the
+production value `https://api.clientadvance.smartwebify.com/api`.
+
+The `build-windows-x64.yml` workflow validates this variable and injects it as
+`VITE_API_BASE_URL` during the Tauri production build. The workflow explicitly
+builds with `VITE_USE_LOCAL_AUTH=false` and `VITE_STORAGE_DRIVER=sqlite`.
 
 ## Client-Exposed Values
 
