@@ -112,6 +112,18 @@ function getUserRoleDisplayLabel(role: string | null | undefined) {
   return role ?? "";
 }
 
+function getServerModeDisplayLabel(serverMode: string | null | undefined) {
+  if (serverMode === "with-server") {
+    return "Avec serveur";
+  }
+
+  if (serverMode === "without-server") {
+    return "Sans serveur";
+  }
+
+  return "Non renseigné";
+}
+
 function getAccountExpirationDisplay(
   accountExpiresAt: string | null | undefined,
 ) {
@@ -704,6 +716,14 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                         </div>
                       </div>
                     )}
+                  <div>
+                    <div className="text-muted-foreground">
+                      Mode de fonctionnement
+                    </div>
+                    <div className="font-medium">
+                      {getServerModeDisplayLabel(settings.server_mode)}
+                    </div>
+                  </div>
                   <div>
                     <div className="text-muted-foreground">
                       Expiration du compte
