@@ -440,9 +440,17 @@ jobs:
 
       - name: Remove temporary SSH credentials
         if: always()
+        continue-on-error: true
         shell: pwsh
         run: |
           $sshDirectory = Join-Path $env:RUNNER_TEMP "clientadvance-release-ssh"
+          $keyPath = Join-Path $sshDirectory "release_key"
+
+          if (Test-Path -LiteralPath $keyPath) {
+            $identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+            & icacls.exe $keyPath /grant:r "$($identity):(F)" | Out-Null
+          }
+
           if (Test-Path -LiteralPath $sshDirectory) {
             Remove-Item -LiteralPath $sshDirectory -Recurse -Force
           }
