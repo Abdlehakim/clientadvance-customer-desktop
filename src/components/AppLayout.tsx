@@ -14,6 +14,11 @@ import {
   CircleUserRound,
   PanelLeftClose,
   PanelLeftOpen,
+  Building2,
+  CalendarDays,
+  Mail,
+  Phone,
+  Server,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -686,49 +691,105 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                   <CircleUserRound className="h-4 w-4" />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-72">
-                <DropdownMenuLabel className="font-normal">
-                  <div className="flex flex-col gap-1">
-                    <div className="font-medium leading-none">{user.name}</div>
-                    <div className="text-xs text-muted-foreground">
-                      {getUserRoleDisplayLabel(user.role)}
+              <DropdownMenuContent
+                align="end"
+                className="w-80 max-w-[calc(100vw-1rem)] p-0"
+              >
+                <DropdownMenuLabel className="p-0 font-normal">
+                  <div className="flex items-center gap-3 px-4 py-3">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-muted">
+                      <CircleUserRound
+                        className="h-5 w-5 text-muted-foreground"
+                        aria-hidden="true"
+                      />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-semibold">{user.name}</div>
+                      <div className="mt-0.5 text-xs text-muted-foreground">
+                        {getUserRoleDisplayLabel(user.role)}
+                      </div>
                     </div>
                   </div>
                 </DropdownMenuLabel>
-                <div className="space-y-2 px-2 py-1.5 text-xs">
-                  <div>
-                    <div className="text-muted-foreground">Email</div>
-                    <div className="truncate font-medium">{user.email}</div>
+
+                <DropdownMenuSeparator className="my-0" />
+
+                <DropdownMenuLabel className="px-4 pb-1 pt-3 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Coordonnées
+                </DropdownMenuLabel>
+
+                <div className="flex items-start gap-3 px-4 py-2">
+                  <Mail
+                    className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground"
+                    aria-hidden="true"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs text-muted-foreground">Email</div>
+                    <div className="truncate text-sm font-medium">{user.email}</div>
                   </div>
-                  {typeof user.phone === "string" &&
-                    user.phone.trim().length > 0 && (
-                      <div>
-                        <div className="text-muted-foreground">Téléphone</div>
-                        <div className="truncate font-medium">{user.phone}</div>
+                </div>
+
+                {typeof user.phone === "string" &&
+                  user.phone.trim().length > 0 && (
+                    <div className="flex items-start gap-3 px-4 py-2">
+                      <Phone
+                        className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground"
+                        aria-hidden="true"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="text-xs text-muted-foreground">Téléphone</div>
+                        <div className="truncate text-sm font-medium">{user.phone}</div>
                       </div>
-                    )}
-                  {typeof user.company_name === "string" &&
-                    user.company_name.trim().length > 0 && (
-                      <div>
-                        <div className="text-muted-foreground">Entreprise</div>
-                        <div className="truncate font-medium">
+                    </div>
+                  )}
+
+                {typeof user.company_name === "string" &&
+                  user.company_name.trim().length > 0 && (
+                    <div className="flex items-start gap-3 px-4 py-2">
+                      <Building2
+                        className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground"
+                        aria-hidden="true"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="text-xs text-muted-foreground">Entreprise</div>
+                        <div className="truncate text-sm font-medium">
                           {user.company_name}
                         </div>
                       </div>
-                    )}
-                  <div>
-                    <div className="text-muted-foreground">
+                    </div>
+                  )}
+
+                <DropdownMenuSeparator className="my-1" />
+
+                <DropdownMenuLabel className="px-4 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Compte
+                </DropdownMenuLabel>
+
+                <div className="flex items-start gap-3 px-4 py-2">
+                  <Server
+                    className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground"
+                    aria-hidden="true"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs text-muted-foreground">
                       Mode de fonctionnement
                     </div>
-                    <div className="font-medium">
+                    <div className="text-sm font-medium">
                       {getServerModeDisplayLabel(settings.server_mode)}
                     </div>
                   </div>
-                  <div>
-                    <div className="text-muted-foreground">
+                </div>
+
+                <div className="flex items-start gap-3 px-4 py-2">
+                  <CalendarDays
+                    className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground"
+                    aria-hidden="true"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs text-muted-foreground">
                       Expiration du compte
                     </div>
-                    <div className="font-medium">{accountExpiration.date}</div>
+                    <div className="text-sm font-medium">{accountExpiration.date}</div>
                     {accountExpiration.remaining && (
                       <div className="mt-0.5 text-xs text-muted-foreground">
                         {accountExpiration.remaining}
@@ -736,14 +797,18 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                     )}
                   </div>
                 </div>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  onSelect={() => void onLogout()}
-                  className="text-destructive focus:text-destructive"
-                >
-                  <LogOut />
-                  Se déconnecter
-                </DropdownMenuItem>
+
+                <DropdownMenuSeparator className="my-0" />
+
+                <div className="p-2">
+                  <DropdownMenuItem
+                    onSelect={() => void onLogout()}
+                    className="h-10 px-3 text-destructive focus:text-destructive"
+                  >
+                    <LogOut className="h-4 w-4" aria-hidden="true" />
+                    Se déconnecter
+                  </DropdownMenuItem>
+                </div>
               </DropdownMenuContent>
             </DropdownMenu>
             {isAdminUser && backendSyncEnabled && (
