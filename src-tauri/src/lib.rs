@@ -26,6 +26,7 @@ use std::{
   time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::{AppHandle, Manager, State};
+use tauri_plugin_opener::OpenerExt;
 
 const DATABASE_FILE_NAME: &str = "gestion-facile.db";
 const DATABASE_BACKUP_FILE_NAME: &str = "gestion-facile.backup.sqlite";
@@ -33,6 +34,8 @@ const DATABASE_CONFIG_FILE_NAME: &str = "database-location.json";
 const DEVICE_IDENTITY_FILE_NAME: &str = "device-identity.json";
 const DATABASE_TEMP_FILE_NAME: &str = "gestion-facile.db.tmp";
 const DATABASE_DEFAULT_FOLDER_NAME: &str = "Gestion Facile";
+const TRIAL_SIGNUP_URL: &str =
+  "https://clientadvance.smartwebify.com/signup";
 #[cfg(debug_assertions)]
 const DEVTOOLS_F12_HOTKEY_SCRIPT: &str = r#"
 ;(function () {
@@ -1512,6 +1515,14 @@ fn send_smtp_email(
   Ok(())
 }
 
+#[tauri::command]
+fn open_trial_signup_page(app: AppHandle) -> Result<(), String> {
+  app
+    .opener()
+    .open_url(TRIAL_SIGNUP_URL, None::<&str>)
+    .map_err(|error| error.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   #[cfg(debug_assertions)]
@@ -1525,6 +1536,7 @@ pub fn run() {
   }
 
   builder
+    .plugin(tauri_plugin_opener::init())
     .manage(DatabaseAccessState::default())
     .invoke_handler(tauri::generate_handler![
       sqlite_init,
@@ -1536,7 +1548,8 @@ pub fn run() {
       choose_database_folder,
       get_or_create_device_id,
       change_database_location,
-      send_smtp_email
+      send_smtp_email,
+      open_trial_signup_page,
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { invokeTauriCommand } from "@/infrastructure/local/sqlite/sqliteClient";
 import { getCurrentUser, login, seedIfNeeded } from "@/lib/data";
 import { initializeStorageDriver } from "@/services/appServices";
 
@@ -20,7 +21,9 @@ function LoginPage() {
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [openerError, setOpenerError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isOpeningSignup, setIsOpeningSignup] = useState(false);
 
   useEffect(() => {
     seedIfNeeded();
@@ -54,6 +57,19 @@ function LoginPage() {
       setError(LOGIN_ERROR_MESSAGE);
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const openTrialSignup = async () => {
+    setOpenerError("");
+    setIsOpeningSignup(true);
+
+    try {
+      await invokeTauriCommand<void>("open_trial_signup_page");
+    } catch {
+      setOpenerError("Impossible d’ouvrir la page d’inscription.");
+    } finally {
+      setIsOpeningSignup(false);
     }
   };
 
@@ -103,6 +119,24 @@ function LoginPage() {
           <Button type="submit" className="w-full" disabled={isSubmitting}>
             {isSubmitting ? "Connexion..." : "Se connecter"}
           </Button>
+
+          <div className="space-y-2 border-t pt-4 text-center">
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full"
+              onClick={openTrialSignup}
+              disabled={isSubmitting || isOpeningSignup}
+            >
+              Créer un compte d’essai gratuit
+            </Button>
+            <p className="text-xs text-muted-foreground">3 jours gratuits</p>
+            {openerError ? (
+              <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                {openerError}
+              </div>
+            ) : null}
+          </div>
         </form>
       </Card>
     </div>
