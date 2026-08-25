@@ -20,6 +20,7 @@ import {
   Phone,
   Server,
   FileUp,
+  Package,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -220,6 +221,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   const [desktopUpdateAvailable, setDesktopUpdateAvailable] = useState(false);
   const [desktopCurrentVersion, setDesktopCurrentVersion] = useState<string | null>(null);
   const [desktopAvailableVersion, setDesktopAvailableVersion] = useState<string | null>(null);
+  const [desktopInstalledVersion, setDesktopInstalledVersion] = useState<string | null>(null);
   const initialUser = mounted ? getCurrentUser() : null;
   const initialUserSessionKey = getUserSessionKey(initialUser);
   const initialSessionCache = readAppLayoutSessionCache(initialUserSessionKey);
@@ -268,6 +270,28 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
         if (!cancelled) {
           setDesktopUpdateChecking(false);
         }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [mounted]);
+
+  useEffect(() => {
+    if (!mounted) {
+      return;
+    }
+
+    let cancelled = false;
+
+    void invokeTauriCommand<string>("get_desktop_version")
+      .then((version) => {
+        if (!cancelled) {
+          setDesktopInstalledVersion(version);
+        }
+      })
+      .catch((error) => {
+        console.error("Unable to read the installed desktop version.", error);
       });
 
     return () => {
@@ -881,6 +905,19 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                     </div>
                     <div className="text-sm font-medium">
                       {getServerModeDisplayLabel(settings.server_mode)}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-start gap-3 px-4 py-2">
+                  <Package
+                    className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground"
+                    aria-hidden="true"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs text-muted-foreground">Version</div>
+                    <div className="text-sm font-medium">
+                      {desktopInstalledVersion ?? "—"}
                     </div>
                   </div>
                 </div>

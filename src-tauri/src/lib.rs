@@ -1533,6 +1533,11 @@ fn open_trial_signup_page(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn get_desktop_version(app: AppHandle) -> String {
+  app.package_info().version.to_string()
+}
+
+#[tauri::command]
 async fn check_desktop_update(app: AppHandle) -> Result<DesktopUpdateStatus, String> {
   let current_version = app.package_info().version.to_string();
   let update = app
@@ -1596,6 +1601,7 @@ pub fn run() {
       change_database_location,
       send_smtp_email,
       open_trial_signup_page,
+      get_desktop_version,
       check_desktop_update,
       install_desktop_update,
     ])
