@@ -19,6 +19,7 @@ import {
   Mail,
   Phone,
   Server,
+  FileUp,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -45,6 +46,7 @@ import {
   formatDateTimeFR,
 } from "@/lib/data";
 import { BACKEND_SYNC_DISABLED_MESSAGE } from "@/infrastructure/local/adminSettingsState";
+import { invokeTauriCommand } from "@/infrastructure/local/sqlite/sqliteClient";
 import { useAppData } from "@/lib/useAppData";
 import {
   deliverQueuedNotifications,
@@ -80,6 +82,12 @@ interface AppLayoutSessionCache {
 interface UserSessionKeySource {
   id?: string | null;
   role?: string | null;
+}
+
+interface DesktopUpdateStatus {
+  currentVersion: string;
+  updateAvailable: boolean;
+  availableVersion: string | null;
 }
 
 let activeSyncPromise: Promise<void> | null = null;
@@ -207,6 +215,11 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   const path = useRouterState({ select: (state) => state.location.pathname });
   const [notifOpen, setNotifOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [desktopUpdateChecking, setDesktopUpdateChecking] = useState(true);
+  const [desktopUpdateInstalling, setDesktopUpdateInstalling] = useState(false);
+  const [desktopUpdateAvailable, setDesktopUpdateAvailable] = useState(false);
+  const [desktopCurrentVersion, setDesktopCurrentVersion] = useState<string | null>(null);
+  const [desktopAvailableVersion, setDesktopAvailableVersion] = useState<string | null>(null);
   const initialUser = mounted ? getCurrentUser() : null;
   const initialUserSessionKey = getUserSessionKey(initialUser);
   const initialSessionCache = readAppLayoutSessionCache(initialUserSessionKey);
@@ -219,11 +232,48 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   const autoSyncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const desktopDeliveryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastDesktopDeliverySignatureRef = useRef<string | null>(null);
+  const desktopUpdateOperationRef = useRef(false);
 
   const user = mounted ? getCurrentUser() : null;
   const userSessionKey = getUserSessionKey(user);
   const cachedSessionState = readAppLayoutSessionCache(userSessionKey);
   const online = mounted ? isOnline() : true;
+
+  useEffect(() => {
+    if (!mounted) {
+      return;
+    }
+
+    let cancelled = false;
+
+    void invokeTauriCommand<DesktopUpdateStatus>("check_desktop_update")
+      .then((status) => {
+        if (cancelled) {
+          return;
+        }
+
+        setDesktopCurrentVersion(status.currentVersion);
+        setDesktopUpdateAvailable(status.updateAvailable);
+        setDesktopAvailableVersion(status.availableVersion);
+      })
+      .catch((error) => {
+        console.error("Desktop update check failed.", error);
+
+        if (!cancelled) {
+          setDesktopUpdateAvailable(false);
+          setDesktopAvailableVersion(null);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setDesktopUpdateChecking(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [mounted]);
 
   useEffect(() => {
     if (!mounted || user || isNavigatingToLoginRef.current) {
@@ -551,6 +601,48 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
     navigate({ to: "/", replace: true });
   };
 
+  const onDesktopUpdate = async () => {
+    if (
+      desktopUpdateOperationRef.current ||
+      desktopUpdateChecking ||
+      desktopUpdateInstalling ||
+      !desktopUpdateAvailable
+    ) {
+      return;
+    }
+
+    desktopUpdateOperationRef.current = true;
+    setDesktopUpdateInstalling(true);
+
+    try {
+      await invokeTauriCommand<void>("install_desktop_update");
+      setDesktopUpdateAvailable(false);
+      setDesktopAvailableVersion(null);
+    } catch {
+      toast.error("Impossible d’installer la mise à jour de ClientAdvans.");
+    } finally {
+      desktopUpdateOperationRef.current = false;
+      setDesktopUpdateInstalling(false);
+    }
+  };
+
+  const desktopUpdateBusy = desktopUpdateChecking || desktopUpdateInstalling;
+  const desktopUpdateEnabled =
+    desktopUpdateAvailable &&
+    desktopAvailableVersion !== null &&
+    !desktopUpdateBusy;
+  const desktopUpdateTitle = desktopUpdateChecking
+    ? "Recherche d’une mise à jour..."
+    : desktopUpdateInstalling
+      ? desktopAvailableVersion
+        ? `Installation de la version ${desktopAvailableVersion}...`
+        : "Installation de la mise à jour..."
+      : desktopUpdateEnabled
+        ? `Mettre à jour vers la version ${desktopAvailableVersion}`
+        : desktopCurrentVersion
+          ? `La version ${desktopCurrentVersion} est à jour.`
+          : "Impossible de vérifier les mises à jour.";
+
   return (
     <div className="flex h-screen w-full overflow-hidden bg-background">
       <aside
@@ -664,6 +756,19 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
             </span>
           </div>
           <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => void onDesktopUpdate()}
+              disabled={!desktopUpdateEnabled}
+              className="h-8 w-8 p-0"
+              aria-label={desktopUpdateTitle}
+              aria-busy={desktopUpdateBusy ? "true" : "false"}
+              title={desktopUpdateTitle}
+            >
+              <FileUp className="h-4 w-4" aria-hidden="true" />
+            </Button>
             <Button
               variant="outline"
               size="sm"

@@ -27,6 +27,7 @@ use std::{
 };
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_opener::OpenerExt;
+use tauri_plugin_updater::UpdaterExt;
 
 const DATABASE_FILE_NAME: &str = "gestion-facile.db";
 const DATABASE_BACKUP_FILE_NAME: &str = "gestion-facile.backup.sqlite";
@@ -178,6 +179,14 @@ VALUES ('last_sync', NULL, CURRENT_TIMESTAMP);
 #[derive(Default)]
 struct DatabaseAccessState {
   sqlite_lock: Mutex<()>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopUpdateStatus {
+  current_version: String,
+  update_available: bool,
+  available_version: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1523,6 +1532,42 @@ fn open_trial_signup_page(app: AppHandle) -> Result<(), String> {
     .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+async fn check_desktop_update(app: AppHandle) -> Result<DesktopUpdateStatus, String> {
+  let current_version = app.package_info().version.to_string();
+  let update = app
+    .updater()
+    .map_err(|error| format!("Unable to initialize desktop updater: {error}"))?
+    .check()
+    .await
+    .map_err(|error| format!("Unable to check for desktop updates: {error}"))?;
+
+  Ok(DesktopUpdateStatus {
+    current_version,
+    update_available: update.is_some(),
+    available_version: update.map(|available_update| available_update.version.to_string()),
+  })
+}
+
+#[tauri::command]
+async fn install_desktop_update(app: AppHandle) -> Result<(), String> {
+  let update = app
+    .updater()
+    .map_err(|error| format!("Unable to initialize desktop updater: {error}"))?
+    .check()
+    .await
+    .map_err(|error| format!("Unable to check for desktop updates: {error}"))?;
+
+  if let Some(update) = update {
+    update
+      .download_and_install(|_, _| {}, || {})
+      .await
+      .map_err(|error| format!("Unable to install desktop update: {error}"))?;
+  }
+
+  Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   #[cfg(debug_assertions)]
@@ -1537,6 +1582,7 @@ pub fn run() {
 
   builder
     .plugin(tauri_plugin_opener::init())
+    .plugin(tauri_plugin_updater::Builder::new().build())
     .manage(DatabaseAccessState::default())
     .invoke_handler(tauri::generate_handler![
       sqlite_init,
@@ -1550,6 +1596,8 @@ pub fn run() {
       change_database_location,
       send_smtp_email,
       open_trial_signup_page,
+      check_desktop_update,
+      install_desktop_update,
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

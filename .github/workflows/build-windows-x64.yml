@@ -118,6 +118,8 @@ jobs:
           SSH_KNOWN_HOSTS: ${{ secrets.CLIENTADVANCE_RELEASE_SSH_KNOWN_HOSTS }}
           SERVER_PATH: ${{ secrets.DESKTOP_RELEASE_SERVER_PATH }}
           PUBLIC_BASE_URL: ${{ secrets.DESKTOP_RELEASE_PUBLIC_BASE_URL }}
+          UPDATER_PUBLIC_KEY: ${{ secrets.TAURI_UPDATER_PUBLIC_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
           $ErrorActionPreference = "Stop"
 
@@ -176,6 +178,13 @@ jobs:
             [string]::IsNullOrWhiteSpace($env:SSH_KNOWN_HOSTS)
           ) {
             throw "Missing SSH authentication configuration."
+          }
+
+          if (
+            [string]::IsNullOrWhiteSpace($env:UPDATER_PUBLIC_KEY) -or
+            [string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)
+          ) {
+            throw "Missing Tauri updater signing configuration."
           }
 
           if (
@@ -267,11 +276,36 @@ jobs:
             throw "Desktop production API health check returned HTTP $($healthResponse.StatusCode)."
           }
 
+      - name: Configure production updater
+        shell: pwsh
+        env:
+          PUBLIC_BASE_URL: ${{ secrets.DESKTOP_RELEASE_PUBLIC_BASE_URL }}
+          UPDATER_PUBLIC_KEY: ${{ secrets.TAURI_UPDATER_PUBLIC_KEY }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $configPath = "src-tauri/tauri.conf.json"
+          $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+          $publicBase = $env:PUBLIC_BASE_URL.TrimEnd("/")
+
+          $config.plugins.updater.pubkey = $env:UPDATER_PUBLIC_KEY.Trim()
+          $config.plugins.updater.endpoints = @("$publicBase/latest.json")
+
+          $utf8WithoutBom = [Text.UTF8Encoding]::new($false)
+          $serializedConfig = $config | ConvertTo-Json -Depth 100
+
+          [IO.File]::WriteAllText(
+            (Resolve-Path -LiteralPath $configPath).Path,
+            $serializedConfig,
+            $utf8WithoutBom
+          )
+
       - name: Build the Tauri NSIS installer
         env:
           VITE_API_BASE_URL: ${{ vars.CLIENTADVANCE_DESKTOP_API_URL }}
           VITE_USE_LOCAL_AUTH: "false"
           VITE_STORAGE_DRIVER: "sqlite"
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri:build
 
       - name: Prepare canonical installer
@@ -292,8 +326,36 @@ jobs:
               -Filter "*.exe"
           )
 
-          if ($installers.Count -ne 1) {
-            throw "Expected exactly one Tauri NSIS installer."
+          $signatures = @(
+            Get-ChildItem `
+              -LiteralPath $nsisDirectory `
+              -File `
+              -Filter "*.exe.sig"
+          )
+
+          if ($installers.Count -ne 1 -or $signatures.Count -ne 1) {
+            throw "Expected exactly one Tauri NSIS installer and signature."
+          }
+
+          $expectedSignaturePath = "$($installers[0].FullName).sig"
+
+          if (
+            -not $signatures[0].FullName.Equals(
+              $expectedSignaturePath,
+              [StringComparison]::OrdinalIgnoreCase
+            )
+          ) {
+            throw "The Tauri updater signature does not match the NSIS installer."
+          }
+
+          $signature = (
+            Get-Content `
+              -LiteralPath $expectedSignaturePath `
+              -Raw
+          ).Trim()
+
+          if ([string]::IsNullOrWhiteSpace($signature)) {
+            throw "The Tauri updater signature is empty."
           }
 
           $filename = "ClientAdvans-$env:EXPECTED_VERSION-x64.exe"
@@ -336,6 +398,51 @@ jobs:
             throw "Invalid final download URL."
           }
 
+          $manifestPath = Join-Path $outputDirectory "latest.json"
+          $manifest = [ordered]@{
+            version = $env:EXPECTED_VERSION
+            notes = "ClientAdvans $env:EXPECTED_VERSION"
+            pub_date = [DateTime]::UtcNow.ToString(
+              "o",
+              [Globalization.CultureInfo]::InvariantCulture
+            )
+            platforms = [ordered]@{
+              "windows-x86_64" = [ordered]@{
+                signature = $signature
+                url = $downloadUrl
+              }
+            }
+          } | ConvertTo-Json -Depth 5
+
+          $utf8WithoutBom = [Text.UTF8Encoding]::new($false)
+          [IO.File]::WriteAllText(
+            $manifestPath,
+            $manifest,
+            $utf8WithoutBom
+          )
+
+          $publishedManifest = Get-Content `
+            -LiteralPath $manifestPath `
+            -Raw | ConvertFrom-Json
+          $windowsUpdate = $publishedManifest.platforms.'windows-x86_64'
+          $manifestUri = $null
+
+          if (
+            [string]$publishedManifest.version -ne $env:EXPECTED_VERSION -or
+            [string]::IsNullOrWhiteSpace([string]$windowsUpdate.signature) -or
+            -not [Uri]::TryCreate(
+              [string]$windowsUpdate.url,
+              [UriKind]::Absolute,
+              [ref]$manifestUri
+            ) -or
+            $manifestUri.Scheme -ne "https" -or
+            -not [string]::IsNullOrEmpty($manifestUri.UserInfo) -or
+            -not [string]::IsNullOrEmpty($manifestUri.Query) -or
+            -not [string]::IsNullOrEmpty($manifestUri.Fragment)
+          ) {
+            throw "Invalid Tauri updater manifest."
+          }
+
           "filename=$filename" |
             Out-File `
               -FilePath $env:GITHUB_OUTPUT `
@@ -361,6 +468,12 @@ jobs:
               -Append
 
           "download_url=$downloadUrl" |
+            Out-File `
+              -FilePath $env:GITHUB_OUTPUT `
+              -Encoding utf8 `
+              -Append
+
+          "manifest_path=$manifestPath" |
             Out-File `
               -FilePath $env:GITHUB_OUTPUT `
               -Encoding utf8 `
@@ -537,6 +650,85 @@ jobs:
 
           if ($LASTEXITCODE -ne 0) {
             throw "Remote checksum validation or atomic publish failed."
+          }
+
+      - name: Upload and atomically publish updater manifest
+        shell: pwsh
+        env:
+          MANIFEST_PATH: ${{ steps.installer.outputs.manifest_path }}
+          SSH_HOST: ${{ secrets.CLIENTADVANCE_RELEASE_SSH_HOST }}
+          SSH_PORT: ${{ secrets.CLIENTADVANCE_RELEASE_SSH_PORT }}
+          SSH_USER: ${{ secrets.CLIENTADVANCE_RELEASE_SSH_USER }}
+          SERVER_PATH: ${{ secrets.DESKTOP_RELEASE_SERVER_PATH }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          if (-not (Test-Path -LiteralPath $env:MANIFEST_PATH -PathType Leaf)) {
+            throw "The Tauri updater manifest is missing."
+          }
+
+          $sshDirectory = Join-Path `
+            $env:RUNNER_TEMP `
+            "clientadvance-release-ssh"
+
+          $keyPath = Join-Path $sshDirectory "release_key"
+          $knownHostsPath = Join-Path $sshDirectory "known_hosts"
+
+          if (
+            -not (Test-Path -LiteralPath $keyPath -PathType Leaf) -or
+            -not (Test-Path -LiteralPath $knownHostsPath -PathType Leaf)
+          ) {
+            throw "Temporary SSH credentials are unavailable."
+          }
+
+          $sshHost = $env:SSH_HOST
+          $sshPort = $env:SSH_PORT
+          $sshUser = $env:SSH_USER
+          $serverPath = $env:SERVER_PATH.TrimEnd("/")
+          $remoteHost = "$sshUser@$sshHost"
+          $remoteFinalPath = "$serverPath/latest.json"
+          $remoteTemporaryPath =
+            "$remoteFinalPath.upload-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+
+          $sshOptions = @(
+            "-i", $keyPath,
+            "-p", $sshPort,
+            "-o", "StrictHostKeyChecking=yes",
+            "-o", "UserKnownHostsFile=$knownHostsPath",
+            "-o", "PasswordAuthentication=no",
+            "-o", "KbdInteractiveAuthentication=no",
+            "-o", "BatchMode=yes"
+          )
+
+          $scpOptions = @(
+            "-i", $keyPath,
+            "-P", $sshPort,
+            "-o", "StrictHostKeyChecking=yes",
+            "-o", "UserKnownHostsFile=$knownHostsPath",
+            "-o", "PasswordAuthentication=no",
+            "-o", "KbdInteractiveAuthentication=no",
+            "-o", "BatchMode=yes"
+          )
+
+          $remoteDestination =
+            "$($sshUser)@$($sshHost):$remoteTemporaryPath"
+
+          & scp.exe `
+            @scpOptions `
+            $env:MANIFEST_PATH `
+            $remoteDestination
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Unable to upload the Tauri updater manifest."
+          }
+
+          & ssh.exe `
+            @sshOptions `
+            $remoteHost `
+            "mv -f -- '$remoteTemporaryPath' '$remoteFinalPath'"
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Atomic updater manifest publish failed."
           }
 
       - name: Notify release completion
