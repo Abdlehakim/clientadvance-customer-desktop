@@ -37,6 +37,7 @@ import {
 import { sendDesktopEmail } from "@/infrastructure/local/sqlite/desktopEmailClient";
 import { getStoredSmtpPassword } from "@/infrastructure/local/smtpPasswordStorage";
 import { apiFetch, ApiError } from "@/infrastructure/remote/apiClient";
+import { syncRemoteService } from "@/infrastructure/remote/syncRemoteService";
 import { getFriendlySmtpErrorMessage } from "@/lib/smtpErrorMessage";
 import {
   authRemoteRepository,
@@ -73,9 +74,7 @@ export const SQLITE_STORAGE_REQUIRED_MESSAGE =
 
 export const authService = authRemoteRepository;
 const sqliteSyncService = createSqliteCachedSyncService({
-  getPendingCount: () => 0,
-  getLastSync: () => null,
-  syncPendingData: async () => ({ ok: false, synced: 0 }),
+  fullSync: syncRemoteService.fullSync,
   setOnlineMode: setConnectionTestOverride,
   isOnlineMode: isConnectionOnline,
 });

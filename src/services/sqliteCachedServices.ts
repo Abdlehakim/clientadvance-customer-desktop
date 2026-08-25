@@ -46,6 +46,12 @@ import {
   isBrowser,
   KEYS,
 } from "@/infrastructure/local/localStorageDatabase";
+import type {
+  SyncRemoteAdminSettings,
+  SyncRemoteFailedItem,
+  SyncRemoteRequest,
+  SyncRemoteResult,
+} from "@/infrastructure/remote/syncRemoteService";
 import { filterActivityLogsByRetention } from "@/services/activityLogRetention";
 
 function emptySettings(): AdminSettings {
@@ -75,8 +81,20 @@ const cache: SqliteCacheState = {
 };
 
 const LOCAL_STORAGE_MIGRATION_STATUS_KEY = "local_storage_migration_status";
-const SQLITE_BACKEND_SYNC_UNAVAILABLE_MESSAGE =
-  "Synchronisation backend indisponible en mode SQLite tant que la synchronisation native SQLite n'est pas active.";
+
+interface SqliteSyncDelegate {
+  fullSync(payload: SyncRemoteRequest): Promise<SyncRemoteResult>;
+  setOnlineMode(value: boolean): void;
+  isOnlineMode(): boolean;
+}
+
+interface PendingSyncSnapshot {
+  clients: Client[];
+  payments: Payment[];
+  adminSettings: AdminSettings | null;
+  activityLogs: ActivityLog[];
+  notifications: NotificationItem[];
+}
 
 export const LEGACY_BUSINESS_LOCAL_STORAGE_KEYS = [
   KEYS.clients,
@@ -609,6 +627,31 @@ function getCachePendingBreakdown() {
   };
 }
 
+function shouldPushNotification(notification: NotificationItem) {
+  if (!isPendingNotification(notification)) {
+    return false;
+  }
+
+  return !(
+    cache.settings.notification_delivery_mode === "desktop-email" &&
+    notification.type === "email" &&
+    notification.status !== "sent" &&
+    notification.status !== "failed"
+  );
+}
+
+function collectPendingSyncSnapshot(): PendingSyncSnapshot {
+  return {
+    clients: cache.clients.filter(isPendingSync).map((client) => ({ ...client })),
+    payments: cache.payments.filter(isPendingSync).map((payment) => ({ ...payment })),
+    adminSettings: isPendingSync(cache.settings) ? { ...cache.settings } : null,
+    activityLogs: cache.logs.filter(isPendingLog).map((log) => ({ ...log })),
+    notifications: cache.notifications
+      .filter(shouldPushNotification)
+      .map((notification) => ({ ...notification })),
+  };
+}
+
 export async function initializeSqliteCache() {
   if (cache.initialized) {
     return;
@@ -1117,6 +1160,167 @@ async function writeLastSync(lastSync: string | null) {
   );
 }
 
+async function mergeRemoteAdminSettings(
+  remoteSettings: SyncRemoteAdminSettings | null,
+) {
+  if (!remoteSettings) {
+    return;
+  }
+
+  const current = await loadSettingsFromSqlite();
+  const next: AdminSettings = {
+    ...current,
+    admin_email:
+      typeof remoteSettings.admin_email === "string"
+        ? remoteSettings.admin_email
+        : current.admin_email,
+    admin_whatsapp:
+      typeof remoteSettings.admin_whatsapp === "string"
+        ? remoteSettings.admin_whatsapp
+        : current.admin_whatsapp,
+    updated_at:
+      typeof remoteSettings.updated_at === "string"
+        ? remoteSettings.updated_at
+        : current.updated_at,
+    updated_by:
+      typeof remoteSettings.updated_by === "string"
+        ? remoteSettings.updated_by
+        : current.updated_by,
+    remote_updated_at:
+      typeof remoteSettings.remote_updated_at === "string"
+        ? remoteSettings.remote_updated_at
+        : current.remote_updated_at,
+    pending_sync: false,
+    sync_status: "synced",
+  };
+
+  await upsertSettings(next);
+}
+
+async function applyRemoteSyncData(result: SyncRemoteResult) {
+  await upsertClients(
+    result.clients.map((client) => ({
+      ...client,
+      cinIssuedAt: client.cinIssuedAt ?? "",
+      birthDate: client.birthDate ?? "",
+      deleted_at: client.deleted_at ?? null,
+      pending_sync: false,
+      sync_status: "synced" as const,
+    })),
+  );
+  await upsertPayments(
+    result.payments.map((payment) => ({
+      ...payment,
+      pending_sync: false,
+      sync_status: "synced" as const,
+    })),
+  );
+  await mergeRemoteAdminSettings(result.adminSettings);
+  await upsertLogs(
+    result.activityLogs.map((log) => ({
+      ...log,
+      pending_sync: false,
+      sync_status: "synced" as const,
+    })),
+  );
+  await upsertNotifications(
+    result.notifications.map((notification) => ({
+      ...notification,
+      pending_sync: false,
+      sync_status: "synced" as const,
+    })),
+  );
+}
+
+function getFailedIds(
+  failedItems: SyncRemoteFailedItem[],
+  entity: SyncRemoteFailedItem["entity"],
+) {
+  return new Set(
+    failedItems
+      .filter((item) => item.entity === entity && item.id)
+      .map((item) => item.id as string),
+  );
+}
+
+async function markEntitySyncResults(
+  table: "clients" | "payments" | "activity_logs" | "notification_queue",
+  ids: string[],
+  failedIds: Set<string>,
+) {
+  const db = await getDb();
+
+  for (const id of ids) {
+    const failed = failedIds.has(id);
+    await db.execute(
+      `
+        UPDATE ${table}
+        SET
+          pending_sync = ?,
+          sync_status = ?
+        WHERE id = ?
+      `,
+      [failed ? 1 : 0, failed ? "failed" : "synced", id],
+    );
+  }
+}
+
+async function markPushedSyncResults(
+  snapshot: PendingSyncSnapshot,
+  failedItems: SyncRemoteFailedItem[],
+) {
+  await markEntitySyncResults(
+    "clients",
+    snapshot.clients.map((client) => client.id),
+    getFailedIds(failedItems, "client"),
+  );
+  await markEntitySyncResults(
+    "payments",
+    snapshot.payments.map((payment) => payment.id),
+    getFailedIds(failedItems, "payment"),
+  );
+
+  if (snapshot.adminSettings) {
+    const settingsFailed = failedItems.some((item) => item.entity === "adminSettings");
+    const db = await getDb();
+    await db.execute(
+      `
+        UPDATE admin_settings
+        SET
+          pending_sync = ?,
+          sync_status = ?
+        WHERE id = ?
+      `,
+      [
+        settingsFailed ? 1 : 0,
+        settingsFailed ? "failed" : "synced",
+        snapshot.adminSettings.id,
+      ],
+    );
+  }
+
+  await markEntitySyncResults(
+    "activity_logs",
+    snapshot.activityLogs.map((log) => log.id),
+    getFailedIds(failedItems, "activityLog"),
+  );
+  await markEntitySyncResults(
+    "notification_queue",
+    snapshot.notifications.map((notification) => notification.id),
+    getFailedIds(failedItems, "notification"),
+  );
+}
+
+function totalSynced(result: SyncRemoteResult["synced"]) {
+  return (
+    result.clients +
+    result.payments +
+    result.adminSettings +
+    result.activityLogs +
+    result.notifications
+  );
+}
+
 function normalizeLegacyUser(record: LegacyLocalUserRecord) {
   const now = new Date().toISOString();
   const id = readString(record.id).trim();
@@ -1524,7 +1728,7 @@ export const sqliteCachedNotificationService: NotificationRepository = {
   },
 };
 
-export function createSqliteCachedSyncService(syncDelegate: SyncRepository): SyncRepository {
+export function createSqliteCachedSyncService(syncDelegate: SqliteSyncDelegate): SyncRepository {
   return {
     getPendingCount() {
       return getCachePendingBreakdown().total;
@@ -1540,7 +1744,27 @@ export function createSqliteCachedSyncService(syncDelegate: SyncRepository): Syn
     },
     async syncPendingData(): Promise<SyncResult> {
       await initializeSqliteCache();
-      throw new Error(SQLITE_BACKEND_SYNC_UNAVAILABLE_MESSAGE);
+
+      if (!syncDelegate.isOnlineMode()) {
+        return { ok: false, synced: 0 };
+      }
+
+      const snapshot = collectPendingSyncSnapshot();
+      const result = await syncDelegate.fullSync({
+        ...snapshot,
+        ...(cache.lastSync ? { since: cache.lastSync } : {}),
+      });
+
+      await applyRemoteSyncData(result);
+      await markPushedSyncResults(snapshot, result.failedItems);
+      await writeLastSync(result.serverTimestamp);
+      await hydrateCacheFromSqlite();
+      emitCacheChange();
+
+      return {
+        ok: result.success,
+        synced: totalSynced(result.synced),
+      };
     },
   };
 }
