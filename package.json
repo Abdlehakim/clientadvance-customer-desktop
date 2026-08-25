@@ -8,8 +8,9 @@
     "build": "vite build && node scripts/generate-tauri-index.mjs",
     "build:dev": "vite build --mode development",
     "preview": "vite preview",
-    "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build",
+    "sync:version": "node scripts/sync-version.mjs",
+    "tauri:dev": "npm run sync:version && tauri dev",
+    "tauri:build": "npm run sync:version && tauri build",
     "lint": "eslint .",
     "format": "prettier --write ."
   },
