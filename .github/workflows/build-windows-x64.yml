@@ -50,12 +50,15 @@ jobs:
           if ($env:RELEASE_ID -notmatch $uuidPattern) {
             throw "Invalid release_id input."
           }
+
           if ($env:EXPECTED_VERSION -notmatch $semverPattern) {
             throw "Invalid expected_version input."
           }
+
           if ($env:COMMIT_SHA -notmatch $commitPattern) {
             throw "Invalid commit_sha input."
           }
+
           if (
             -not [string]::IsNullOrWhiteSpace($env:CURRENT_VERSION) -and
             $env:CURRENT_VERSION -notmatch $semverPattern
@@ -122,6 +125,7 @@ jobs:
             param([string]$Value, [string]$Name)
 
             $uri = $null
+
             if (
               [string]::IsNullOrWhiteSpace($Value) -or
               -not [Uri]::TryCreate($Value, [UriKind]::Absolute, [ref]$uri) -or
@@ -140,6 +144,7 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($env:CALLBACK_TOKEN)) {
             throw "Missing callback token configuration."
           }
+
           if (
             [string]::IsNullOrWhiteSpace($env:SSH_HOST) -or
             $env:SSH_HOST.Length -gt 253 -or
@@ -150,6 +155,7 @@ jobs:
           }
 
           [int]$sshPort = 0
+
           if (
             -not [int]::TryParse($env:SSH_PORT, [ref]$sshPort) -or
             $sshPort -lt 1 -or
@@ -157,18 +163,21 @@ jobs:
           ) {
             throw "Invalid SSH port configuration."
           }
+
           if (
             [string]::IsNullOrWhiteSpace($env:SSH_USER) -or
             $env:SSH_USER -notmatch "^[A-Za-z_][A-Za-z0-9._-]{0,31}$"
           ) {
             throw "Invalid SSH user configuration."
           }
+
           if (
             [string]::IsNullOrWhiteSpace($env:SSH_PRIVATE_KEY_B64) -or
             [string]::IsNullOrWhiteSpace($env:SSH_KNOWN_HOSTS)
           ) {
             throw "Missing SSH authentication configuration."
           }
+
           if (
             [string]::IsNullOrWhiteSpace($env:SERVER_PATH) -or
             -not $env:SERVER_PATH.StartsWith("/") -or
@@ -188,12 +197,15 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $callbackBase = $env:CALLBACK_BASE_URL.TrimEnd("/")
+
           $headers = @{
             "x-release-callback-token" = $env:CALLBACK_TOKEN
           }
+
           $body = @{
             workflowRunId = $env:GITHUB_RUN_ID
           } | ConvertTo-Json -Compress
+
           $request = @{
             Uri = "$callbackBase/$env:RELEASE_ID/building"
             Method = "Post"
@@ -238,13 +250,20 @@ jobs:
           }
 
           $healthUrl = "$apiBaseUrl/health"
+
           try {
-            $healthResponse = Invoke-WebRequest -Uri $healthUrl -Method Get -TimeoutSec 15
+            $healthResponse = Invoke-WebRequest `
+              -Uri $healthUrl `
+              -Method Get `
+              -TimeoutSec 15
           } catch {
             throw "Desktop production API health check failed: $($_.Exception.Message)"
           }
 
-          if ($healthResponse.StatusCode -lt 200 -or $healthResponse.StatusCode -ge 300) {
+          if (
+            $healthResponse.StatusCode -lt 200 -or
+            $healthResponse.StatusCode -ge 300
+          ) {
             throw "Desktop production API health check returned HTTP $($healthResponse.StatusCode)."
           }
 
@@ -263,9 +282,14 @@ jobs:
           PUBLIC_BASE_URL: ${{ secrets.DESKTOP_RELEASE_PUBLIC_BASE_URL }}
         run: |
           $ErrorActionPreference = "Stop"
+
           $nsisDirectory = "src-tauri/target/release/bundle/nsis"
+
           $installers = @(
-            Get-ChildItem -LiteralPath $nsisDirectory -File -Filter "*.exe"
+            Get-ChildItem `
+              -LiteralPath $nsisDirectory `
+              -File `
+              -Filter "*.exe"
           )
 
           if ($installers.Count -ne 1) {
@@ -273,13 +297,32 @@ jobs:
           }
 
           $filename = "ClientAdvans-$env:EXPECTED_VERSION-x64.exe"
-          $outputDirectory = Join-Path $env:RUNNER_TEMP "clientadvance-release-output"
-          New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
-          $outputPath = Join-Path $outputDirectory $filename
-          Copy-Item -LiteralPath $installers[0].FullName -Destination $outputPath -Force
+          $outputDirectory = Join-Path `
+            $env:RUNNER_TEMP `
+            "clientadvance-release-output"
 
-          $sha256 = (Get-FileHash -LiteralPath $outputPath -Algorithm SHA256).Hash.ToLowerInvariant()
-          $fileSizeBytes = (Get-Item -LiteralPath $outputPath).Length.ToString()
+          New-Item `
+            -ItemType Directory `
+            -Path $outputDirectory `
+            -Force | Out-Null
+
+          $outputPath = Join-Path $outputDirectory $filename
+
+          Copy-Item `
+            -LiteralPath $installers[0].FullName `
+            -Destination $outputPath `
+            -Force
+
+          $sha256 = (
+            Get-FileHash `
+              -LiteralPath $outputPath `
+              -Algorithm SHA256
+          ).Hash.ToLowerInvariant()
+
+          $fileSizeBytes = (
+            Get-Item -LiteralPath $outputPath
+          ).Length.ToString()
+
           $publicBase = $env:PUBLIC_BASE_URL.TrimEnd("/")
           $downloadUrl = "$publicBase/$env:EXPECTED_VERSION/$filename"
           $downloadUri = [Uri]$downloadUrl
@@ -293,11 +336,35 @@ jobs:
             throw "Invalid final download URL."
           }
 
-          "filename=$filename" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          "path=$outputPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          "sha256=$sha256" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          "file_size_bytes=$fileSizeBytes" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          "download_url=$downloadUrl" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "filename=$filename" |
+            Out-File `
+              -FilePath $env:GITHUB_OUTPUT `
+              -Encoding utf8 `
+              -Append
+
+          "path=$outputPath" |
+            Out-File `
+              -FilePath $env:GITHUB_OUTPUT `
+              -Encoding utf8 `
+              -Append
+
+          "sha256=$sha256" |
+            Out-File `
+              -FilePath $env:GITHUB_OUTPUT `
+              -Encoding utf8 `
+              -Append
+
+          "file_size_bytes=$fileSizeBytes" |
+            Out-File `
+              -FilePath $env:GITHUB_OUTPUT `
+              -Encoding utf8 `
+              -Append
+
+          "download_url=$downloadUrl" |
+            Out-File `
+              -FilePath $env:GITHUB_OUTPUT `
+              -Encoding utf8 `
+              -Append
 
       - name: Notify upload started
         shell: pwsh
@@ -308,12 +375,15 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $callbackBase = $env:CALLBACK_BASE_URL.TrimEnd("/")
+
           $headers = @{
             "x-release-callback-token" = $env:CALLBACK_TOKEN
           }
+
           $body = @{
             workflowRunId = $env:GITHUB_RUN_ID
           } | ConvertTo-Json -Compress
+
           $request = @{
             Uri = "$callbackBase/$env:RELEASE_ID/uploading"
             Method = "Post"
@@ -339,10 +409,19 @@ jobs:
           SERVER_PATH: ${{ secrets.DESKTOP_RELEASE_SERVER_PATH }}
         run: |
           $ErrorActionPreference = "Stop"
-          $sshDirectory = Join-Path $env:RUNNER_TEMP "clientadvance-release-ssh"
-          New-Item -ItemType Directory -Path $sshDirectory -Force | Out-Null
+
+          $sshDirectory = Join-Path `
+            $env:RUNNER_TEMP `
+            "clientadvance-release-ssh"
+
+          New-Item `
+            -ItemType Directory `
+            -Path $sshDirectory `
+            -Force | Out-Null
+
           $keyPath = Join-Path $sshDirectory "release_key"
           $knownHostsPath = Join-Path $sshDirectory "known_hosts"
+
           $utf8WithoutBom = [Text.UTF8Encoding]::new($false)
 
           try {
@@ -353,29 +432,57 @@ jobs:
             throw "Invalid Base64 SSH private key configuration."
           }
 
-          [IO.File]::WriteAllBytes($keyPath, $keyBytes)
+          [IO.File]::WriteAllBytes(
+            $keyPath,
+            $keyBytes
+          )
 
+          # IMPORTANT:
+          # Restrict the private key ACL BEFORE OpenSSH tries to read it.
+          # GitHub-hosted Windows runners otherwise create the file with
+          # inherited BUILTIN\Users permissions and OpenSSH rejects it.
+          $identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+
+          & icacls.exe `
+            $keyPath `
+            /inheritance:r `
+            /grant:r "$($identity):(R)" |
+            Out-Null
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Unable to protect the temporary SSH key."
+          }
+
+          # Validate only after permissions have been secured.
           & ssh-keygen.exe -y -f $keyPath | Out-Null
+
           if ($LASTEXITCODE -ne 0) {
             throw "Decoded SSH private key is invalid."
           }
 
-          [IO.File]::WriteAllText($knownHostsPath, $env:SSH_KNOWN_HOSTS, $utf8WithoutBom)
-
-          $identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-          & icacls.exe $keyPath /inheritance:r /grant:r "$($identity):(R)" | Out-Null
-          if ($LASTEXITCODE -ne 0) {
-            throw "Unable to protect the temporary SSH key."
-          }
+          [IO.File]::WriteAllText(
+            $knownHostsPath,
+            $env:SSH_KNOWN_HOSTS,
+            $utf8WithoutBom
+          )
 
           $sshHost = $env:SSH_HOST
           $sshPort = $env:SSH_PORT
           $sshUser = $env:SSH_USER
           $serverPath = $env:SERVER_PATH.TrimEnd("/")
-          $targetDirectory = "$serverPath/$env:EXPECTED_VERSION"
-          $remoteFinalPath = "$targetDirectory/$env:INSTALLER_FILENAME"
-          $remoteTemporaryPath = "$remoteFinalPath.upload-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
-          $remoteHost = "$sshUser@$sshHost"
+
+          $targetDirectory =
+            "$serverPath/$env:EXPECTED_VERSION"
+
+          $remoteFinalPath =
+            "$targetDirectory/$env:INSTALLER_FILENAME"
+
+          $remoteTemporaryPath =
+            "$remoteFinalPath.upload-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+
+          $remoteHost =
+            "$sshUser@$sshHost"
+
           $sshOptions = @(
             "-i", $keyPath,
             "-p", $sshPort,
@@ -385,6 +492,7 @@ jobs:
             "-o", "KbdInteractiveAuthentication=no",
             "-o", "BatchMode=yes"
           )
+
           $scpOptions = @(
             "-i", $keyPath,
             "-P", $sshPort,
@@ -395,13 +503,23 @@ jobs:
             "-o", "BatchMode=yes"
           )
 
-          & ssh.exe @sshOptions $remoteHost "mkdir -p -- '$targetDirectory'"
+          & ssh.exe `
+            @sshOptions `
+            $remoteHost `
+            "mkdir -p -- '$targetDirectory'"
+
           if ($LASTEXITCODE -ne 0) {
             throw "Unable to create the remote release directory."
           }
 
-          $remoteDestination = "$($sshUser)@$($sshHost):$remoteTemporaryPath"
-          & scp.exe @scpOptions $env:INSTALLER_PATH $remoteDestination
+          $remoteDestination =
+            "$($sshUser)@$($sshHost):$remoteTemporaryPath"
+
+          & scp.exe `
+            @scpOptions `
+            $env:INSTALLER_PATH `
+            $remoteDestination
+
           if ($LASTEXITCODE -ne 0) {
             throw "Unable to upload the release installer."
           }
@@ -411,7 +529,12 @@ jobs:
             "'$remoteTemporaryPath' | sha256sum --check --status " +
             "&& mv -f -- '$remoteTemporaryPath' '$remoteFinalPath'"
           )
-          & ssh.exe @sshOptions $remoteHost $verifyAndPublish
+
+          & ssh.exe `
+            @sshOptions `
+            $remoteHost `
+            $verifyAndPublish
+
           if ($LASTEXITCODE -ne 0) {
             throw "Remote checksum validation or atomic publish failed."
           }
@@ -430,10 +553,13 @@ jobs:
           FILE_SIZE_BYTES: ${{ steps.installer.outputs.file_size_bytes }}
         run: |
           $ErrorActionPreference = "Stop"
+
           $callbackBase = $env:CALLBACK_BASE_URL.TrimEnd("/")
+
           $headers = @{
             "x-release-callback-token" = $env:CALLBACK_TOKEN
           }
+
           $body = @{
             version = $env:EXPECTED_VERSION
             commitSha = $env:COMMIT_SHA.ToLowerInvariant()
@@ -443,6 +569,7 @@ jobs:
             sha256 = $env:INSTALLER_SHA256
             fileSizeBytes = $env:FILE_SIZE_BYTES
           } | ConvertTo-Json -Compress
+
           $request = @{
             Uri = "$callbackBase/$env:RELEASE_ID/complete"
             Method = "Post"
@@ -458,16 +585,28 @@ jobs:
         continue-on-error: true
         shell: pwsh
         run: |
-          $sshDirectory = Join-Path $env:RUNNER_TEMP "clientadvance-release-ssh"
-          $keyPath = Join-Path $sshDirectory "release_key"
+          $sshDirectory = Join-Path `
+            $env:RUNNER_TEMP `
+            "clientadvance-release-ssh"
+
+          $keyPath = Join-Path `
+            $sshDirectory `
+            "release_key"
 
           if (Test-Path -LiteralPath $keyPath) {
             $identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-            & icacls.exe $keyPath /grant:r "$($identity):(F)" | Out-Null
+
+            & icacls.exe `
+              $keyPath `
+              /grant:r "$($identity):(F)" |
+              Out-Null
           }
 
           if (Test-Path -LiteralPath $sshDirectory) {
-            Remove-Item -LiteralPath $sshDirectory -Recurse -Force
+            Remove-Item `
+              -LiteralPath $sshDirectory `
+              -Recurse `
+              -Force
           }
 
       - name: Notify release failure
@@ -480,13 +619,16 @@ jobs:
           RELEASE_ID: ${{ inputs.release_id }}
         run: |
           $callbackBase = $env:CALLBACK_BASE_URL.TrimEnd("/")
+
           $headers = @{
             "x-release-callback-token" = $env:CALLBACK_TOKEN
           }
+
           $body = @{
             workflowRunId = $env:GITHUB_RUN_ID
             errorMessage = "GitHub Actions desktop build failed."
           } | ConvertTo-Json -Compress
+
           $request = @{
             Uri = "$callbackBase/$env:RELEASE_ID/fail"
             Method = "Post"

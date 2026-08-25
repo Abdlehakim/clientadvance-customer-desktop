@@ -1,0 +1,411 @@
+name: Build Microsoft Store AppX x64
+run-name: Store AppX ${{ inputs.expected_version }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_version:
+        description: Approved semantic version
+        required: true
+        type: string
+      commit_sha:
+        description: Approved 40-character commit SHA
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows-store-x64:
+    name: Build Microsoft Store AppX x64 package
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Validate workflow inputs
+        shell: pwsh
+        env:
+          EXPECTED_VERSION: ${{ inputs.expected_version }}
+          COMMIT_SHA: ${{ inputs.commit_sha }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $semverPattern = "^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
+          $commitPattern = "^[0-9a-fA-F]{40}$"
+
+          if ($env:EXPECTED_VERSION -notmatch $semverPattern) {
+            throw "Invalid expected_version input."
+          }
+          if ($env:COMMIT_SHA -notmatch $commitPattern) {
+            throw "Invalid commit_sha input."
+          }
+
+      - name: Check out the approved commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit_sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Set up stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate checked-out source
+        shell: pwsh
+        env:
+          EXPECTED_VERSION: ${{ inputs.expected_version }}
+          COMMIT_SHA: ${{ inputs.commit_sha }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $actualCommit = (git rev-parse HEAD).Trim()
+
+          if (
+            $actualCommit.ToLowerInvariant() -ne
+            $env:COMMIT_SHA.ToLowerInvariant()
+          ) {
+            throw "The checked-out commit does not match the approved commit."
+          }
+
+          $tauriConfig = Get-Content -LiteralPath "src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json
+
+          if ([string]$tauriConfig.version -ne $env:EXPECTED_VERSION) {
+            throw "The Tauri version does not match the approved version."
+          }
+
+      - name: Validate desktop production API configuration
+        shell: pwsh
+        env:
+          CLIENTADVANCE_DESKTOP_API_URL: ${{ vars.CLIENTADVANCE_DESKTOP_API_URL }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          if ([string]::IsNullOrWhiteSpace($env:CLIENTADVANCE_DESKTOP_API_URL)) {
+            throw "Missing CLIENTADVANCE_DESKTOP_API_URL repository variable."
+          }
+
+          $apiBaseUrl = $env:CLIENTADVANCE_DESKTOP_API_URL.Trim().TrimEnd("/")
+          $apiUri = $null
+
+          if (
+            -not [Uri]::TryCreate($apiBaseUrl, [UriKind]::Absolute, [ref]$apiUri) -or
+            $apiUri.Scheme -ne "https" -or
+            [string]::IsNullOrWhiteSpace($apiUri.Host) -or
+            -not [string]::IsNullOrEmpty($apiUri.UserInfo) -or
+            -not [string]::IsNullOrEmpty($apiUri.Query) -or
+            -not [string]::IsNullOrEmpty($apiUri.Fragment)
+          ) {
+            throw "CLIENTADVANCE_DESKTOP_API_URL must be an absolute HTTPS URL without credentials, query parameters, or a fragment."
+          }
+
+          if ($apiUri.IsLoopback) {
+            throw "CLIENTADVANCE_DESKTOP_API_URL must not use a loopback or local hostname."
+          }
+
+          if (-not $apiUri.AbsolutePath.EndsWith("/api", [StringComparison]::Ordinal)) {
+            throw "CLIENTADVANCE_DESKTOP_API_URL path must end with /api."
+          }
+
+          $healthUrl = "$apiBaseUrl/health"
+          try {
+            $healthResponse = Invoke-WebRequest -Uri $healthUrl -Method Get -TimeoutSec 15
+          } catch {
+            throw "Desktop production API health check failed: $($_.Exception.Message)"
+          }
+
+          if ($healthResponse.StatusCode -lt 200 -or $healthResponse.StatusCode -ge 300) {
+            throw "Desktop production API health check returned HTTP $($healthResponse.StatusCode)."
+          }
+
+      - name: Validate Microsoft Store identity configuration
+        shell: pwsh
+        env:
+          STORE_IDENTITY_NAME: ${{ vars.CLIENTADVANCE_STORE_IDENTITY_NAME }}
+          STORE_PUBLISHER: ${{ vars.CLIENTADVANCE_STORE_PUBLISHER }}
+          STORE_PUBLISHER_DISPLAY_NAME: ${{ vars.CLIENTADVANCE_STORE_PUBLISHER_DISPLAY_NAME }}
+          STORE_APPLICATION_ID: ${{ vars.CLIENTADVANCE_STORE_APPLICATION_ID }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          if (
+            [string]::IsNullOrWhiteSpace($env:STORE_IDENTITY_NAME) -or
+            $env:STORE_IDENTITY_NAME.Length -gt 50 -or
+            $env:STORE_IDENTITY_NAME -notmatch "^[A-Za-z0-9][A-Za-z0-9.-]+$"
+          ) {
+            throw "CLIENTADVANCE_STORE_IDENTITY_NAME is missing or invalid. Use the verified Microsoft Partner Center Identity.Name value."
+          }
+
+          if (
+            [string]::IsNullOrWhiteSpace($env:STORE_PUBLISHER) -or
+            $env:STORE_PUBLISHER.Length -gt 8192 -or
+            $env:STORE_PUBLISHER -match "[\x00-\x1F\x7F]"
+          ) {
+            throw "CLIENTADVANCE_STORE_PUBLISHER is missing or invalid. Use the verified Microsoft Partner Center Publisher value."
+          }
+
+          if (
+            [string]::IsNullOrWhiteSpace($env:STORE_PUBLISHER_DISPLAY_NAME) -or
+            $env:STORE_PUBLISHER_DISPLAY_NAME.Length -gt 256 -or
+            $env:STORE_PUBLISHER_DISPLAY_NAME -match "[\x00-\x1F\x7F]"
+          ) {
+            throw "CLIENTADVANCE_STORE_PUBLISHER_DISPLAY_NAME is missing or invalid."
+          }
+
+          if (
+            [string]::IsNullOrWhiteSpace($env:STORE_APPLICATION_ID) -or
+            $env:STORE_APPLICATION_ID.Length -gt 64 -or
+            $env:STORE_APPLICATION_ID -notmatch "^[A-Za-z0-9][A-Za-z0-9.-]*$"
+          ) {
+            throw "CLIENTADVANCE_STORE_APPLICATION_ID is missing or invalid. Use the verified Microsoft Partner Center application ID."
+          }
+
+      - name: Build the approved Tauri application
+        env:
+          VITE_API_BASE_URL: ${{ vars.CLIENTADVANCE_DESKTOP_API_URL }}
+          VITE_USE_LOCAL_AUTH: "false"
+          VITE_STORAGE_DRIVER: "sqlite"
+        run: npm run tauri:build -- --no-bundle
+
+      - name: Package Microsoft Store AppX
+        id: store-package
+        shell: pwsh
+        env:
+          EXPECTED_VERSION: ${{ inputs.expected_version }}
+          COMMIT_SHA: ${{ inputs.commit_sha }}
+          STORE_IDENTITY_NAME: ${{ vars.CLIENTADVANCE_STORE_IDENTITY_NAME }}
+          STORE_PUBLISHER: ${{ vars.CLIENTADVANCE_STORE_PUBLISHER }}
+          STORE_PUBLISHER_DISPLAY_NAME: ${{ vars.CLIENTADVANCE_STORE_PUBLISHER_DISPLAY_NAME }}
+          STORE_APPLICATION_ID: ${{ vars.CLIENTADVANCE_STORE_APPLICATION_ID }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $actualCommit = (git rev-parse HEAD).Trim().ToLowerInvariant()
+          if ($actualCommit -ne $env:COMMIT_SHA.Trim().ToLowerInvariant()) {
+            throw "The Store package does not come from the approved commit."
+          }
+
+          $tauriConfig = Get-Content -LiteralPath "src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json
+          $tauriVersion = [string]$tauriConfig.version
+          if ($tauriVersion -ne $env:EXPECTED_VERSION) {
+            throw "The Store package version does not match the approved Tauri version."
+          }
+
+          $versionMatch = [regex]::Match(
+            $tauriVersion,
+            "^([0-9]+)\.([0-9]+)\.([0-9]+)(?:[-+].*)?$"
+          )
+          if (-not $versionMatch.Success) {
+            throw "The approved Tauri version cannot be converted to an AppX version."
+          }
+
+          $appxVersionParts = @()
+          foreach ($index in 1..3) {
+            [uint64]$part = 0
+            if (
+              -not [uint64]::TryParse($versionMatch.Groups[$index].Value, [ref]$part) -or
+              $part -gt 65535
+            ) {
+              throw "The approved Tauri version contains an AppX version component outside 0-65535."
+            }
+            $appxVersionParts += $part
+          }
+          $appxVersion = "$($appxVersionParts[0]).$($appxVersionParts[1]).$($appxVersionParts[2]).0"
+
+          $binaryPath = Join-Path (Get-Location).Path "src-tauri/target/release/clientadvance-desktop.exe"
+          if (-not (Test-Path -LiteralPath $binaryPath -PathType Leaf)) {
+            throw "The approved Tauri x64 executable was not generated."
+          }
+          if ((Get-Item -LiteralPath $binaryPath).Length -le 0) {
+            throw "The approved Tauri x64 executable is empty."
+          }
+
+          $packageDirectory = Join-Path $env:RUNNER_TEMP "clientadvance-store-package"
+          $assetsDirectory = Join-Path $packageDirectory "Assets"
+          $outputDirectory = Join-Path (Get-Location).Path "store-output"
+          New-Item -ItemType Directory -Path $assetsDirectory -Force | Out-Null
+          New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
+          Copy-Item -LiteralPath $binaryPath -Destination (Join-Path $packageDirectory "ClientAdvans.exe") -Force
+
+          Add-Type -AssemblyName System.Drawing
+          $sourceIconPath = Join-Path (Get-Location).Path "src-tauri/icons/128x128.png"
+          if (-not (Test-Path -LiteralPath $sourceIconPath -PathType Leaf)) {
+            throw "The ClientAdvans Store source icon is missing."
+          }
+
+          function Write-StoreAsset {
+            param(
+              [string]$Destination,
+              [int]$Width,
+              [int]$Height
+            )
+
+            $source = [System.Drawing.Image]::FromFile($sourceIconPath)
+            $bitmap = [System.Drawing.Bitmap]::new($Width, $Height)
+            $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+
+            try {
+              $graphics.Clear([System.Drawing.Color]::Transparent)
+              $graphics.CompositingQuality = [System.Drawing.Drawing2D.CompositingQuality]::HighQuality
+              $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+              $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+
+              $scale = [Math]::Min($Width / $source.Width, $Height / $source.Height)
+              $drawWidth = [Math]::Max(1, [int][Math]::Round($source.Width * $scale))
+              $drawHeight = [Math]::Max(1, [int][Math]::Round($source.Height * $scale))
+              $drawX = [int](($Width - $drawWidth) / 2)
+              $drawY = [int](($Height - $drawHeight) / 2)
+              $graphics.DrawImage($source, $drawX, $drawY, $drawWidth, $drawHeight)
+              $bitmap.Save($Destination, [System.Drawing.Imaging.ImageFormat]::Png)
+            } finally {
+              $graphics.Dispose()
+              $bitmap.Dispose()
+              $source.Dispose()
+            }
+          }
+
+          Write-StoreAsset (Join-Path $assetsDirectory "StoreLogo.png") 50 50
+          Write-StoreAsset (Join-Path $assetsDirectory "Square44x44Logo.png") 44 44
+          Write-StoreAsset (Join-Path $assetsDirectory "Square150x150Logo.png") 150 150
+          Write-StoreAsset (Join-Path $assetsDirectory "Wide310x150Logo.png") 310 150
+          Write-StoreAsset (Join-Path $assetsDirectory "Square310x310Logo.png") 310 310
+
+          $identityName = [Security.SecurityElement]::Escape($env:STORE_IDENTITY_NAME.Trim())
+          $publisher = [Security.SecurityElement]::Escape($env:STORE_PUBLISHER.Trim())
+          $publisherDisplayName = [Security.SecurityElement]::Escape($env:STORE_PUBLISHER_DISPLAY_NAME.Trim())
+          $applicationId = [Security.SecurityElement]::Escape($env:STORE_APPLICATION_ID.Trim())
+          $manifest = @"
+          <?xml version="1.0" encoding="utf-8"?>
+          <Package
+            xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+            xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+            xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+            IgnorableNamespaces="uap rescap">
+            <Identity Name="$identityName" Publisher="$publisher" Version="$appxVersion" ProcessorArchitecture="x64" />
+            <Properties>
+              <DisplayName>ClientAdvans</DisplayName>
+              <PublisherDisplayName>$publisherDisplayName</PublisherDisplayName>
+              <Description>ClientAdvans</Description>
+              <Logo>Assets\StoreLogo.png</Logo>
+            </Properties>
+            <Resources>
+              <Resource Language="fr-fr" />
+            </Resources>
+            <Dependencies>
+              <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.26100.0" />
+            </Dependencies>
+            <Capabilities>
+              <rescap:Capability Name="runFullTrust" />
+            </Capabilities>
+            <Applications>
+              <Application Id="$applicationId" Executable="ClientAdvans.exe" EntryPoint="Windows.FullTrustApplication">
+                <uap:VisualElements
+                  DisplayName="ClientAdvans"
+                  Description="ClientAdvans"
+                  BackgroundColor="transparent"
+                  Square150x150Logo="Assets\Square150x150Logo.png"
+                  Square44x44Logo="Assets\Square44x44Logo.png">
+                  <uap:DefaultTile
+                    Wide310x150Logo="Assets\Wide310x150Logo.png"
+                    Square310x310Logo="Assets\Square310x310Logo.png" />
+                </uap:VisualElements>
+              </Application>
+            </Applications>
+          </Package>
+          "@
+          $manifestPath = Join-Path $packageDirectory "AppxManifest.xml"
+          [IO.File]::WriteAllText(
+            $manifestPath,
+            $manifest,
+            [Text.UTF8Encoding]::new($false)
+          )
+
+          $sdkBinRoot = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin"
+          $makeAppx = Get-ChildItem -LiteralPath $sdkBinRoot -Filter "MakeAppx.exe" -File -Recurse |
+            Where-Object { $_.Directory.Name -ieq "x64" } |
+            Sort-Object -Property FullName -Descending |
+            Select-Object -First 1
+          if (-not $makeAppx) {
+            throw "MakeAppx.exe was not found in the installed Windows SDK."
+          }
+
+          $filename = "ClientAdvans-$tauriVersion-x64.appx"
+          $outputPath = Join-Path $outputDirectory $filename
+          & $makeAppx.FullName pack /d $packageDirectory /p $outputPath /o
+          if ($LASTEXITCODE -ne 0) {
+            throw "MakeAppx.exe could not create the Microsoft Store package."
+          }
+
+          $x64Packages = @(Get-ChildItem -LiteralPath $outputDirectory -Filter "*-x64.appx" -File)
+          if ($x64Packages.Count -ne 1 -or $x64Packages[0].Name -cne $filename) {
+            throw "Expected exactly one canonical ClientAdvans x64 AppX package."
+          }
+          if ($x64Packages[0].Length -le 0) {
+            throw "The generated Microsoft Store AppX package is empty."
+          }
+
+          $unpackDirectory = Join-Path $env:RUNNER_TEMP "clientadvance-store-validation"
+          New-Item -ItemType Directory -Path $unpackDirectory -Force | Out-Null
+          & $makeAppx.FullName unpack /p $outputPath /d $unpackDirectory /o
+          if ($LASTEXITCODE -ne 0) {
+            throw "MakeAppx.exe could not unpack the generated package for validation."
+          }
+
+          [xml]$generatedManifest = Get-Content -LiteralPath (Join-Path $unpackDirectory "AppxManifest.xml") -Raw
+          $namespaceManager = [System.Xml.XmlNamespaceManager]::new($generatedManifest.NameTable)
+          $namespaceManager.AddNamespace("appx", $generatedManifest.DocumentElement.NamespaceURI)
+          $identity = $generatedManifest.SelectSingleNode("/appx:Package/appx:Identity", $namespaceManager)
+          $properties = $generatedManifest.SelectSingleNode("/appx:Package/appx:Properties", $namespaceManager)
+          $application = $generatedManifest.SelectSingleNode("/appx:Package/appx:Applications/appx:Application", $namespaceManager)
+
+          if (-not $identity -or -not $properties -or -not $application) {
+            throw "The generated AppX manifest is incomplete."
+          }
+          if ($identity.GetAttribute("Name") -cne $env:STORE_IDENTITY_NAME.Trim()) {
+            throw "The generated AppX Identity.Name does not match the configured Store identity."
+          }
+          if ($identity.GetAttribute("Publisher") -cne $env:STORE_PUBLISHER.Trim()) {
+            throw "The generated AppX Identity.Publisher does not match the configured Store publisher."
+          }
+          if ($identity.GetAttribute("ProcessorArchitecture") -cne "x64") {
+            throw "The generated AppX architecture is not x64."
+          }
+          if ($identity.GetAttribute("Version") -cne $appxVersion) {
+            throw "The generated AppX version does not match the approved Tauri version."
+          }
+          if ($application.GetAttribute("Id") -cne $env:STORE_APPLICATION_ID.Trim()) {
+            throw "The generated AppX Application Id does not match the configured Store application ID."
+          }
+          if ($application.GetAttribute("Executable") -cne "ClientAdvans.exe") {
+            throw "The generated AppX executable is invalid."
+          }
+
+          $publisherDisplayNameNode = $properties.SelectSingleNode("appx:PublisherDisplayName", $namespaceManager)
+          if (
+            -not $publisherDisplayNameNode -or
+            $publisherDisplayNameNode.InnerText -cne $env:STORE_PUBLISHER_DISPLAY_NAME.Trim()
+          ) {
+            throw "The generated AppX publisher display name is invalid."
+          }
+
+          $finalCommit = (git rev-parse HEAD).Trim().ToLowerInvariant()
+          if ($finalCommit -ne $env:COMMIT_SHA.Trim().ToLowerInvariant()) {
+            throw "The validated AppX no longer corresponds to the approved commit."
+          }
+
+          "version=$tauriVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "path=$outputPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Upload Microsoft Store AppX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClientAdvans-Store-x64-${{ inputs.expected_version }}
+          path: store-output/ClientAdvans-${{ inputs.expected_version }}-x64.appx
+          if-no-files-found: error
+          retention-days: 14
