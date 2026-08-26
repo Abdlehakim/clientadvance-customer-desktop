@@ -22,10 +22,10 @@ use std::{
   fs,
   path::{Path, PathBuf},
   process::Command,
-  sync::Mutex,
+  sync::{Arc, Mutex},
   time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_updater::UpdaterExt;
 
@@ -187,6 +187,16 @@ struct DesktopUpdateStatus {
   current_version: String,
   update_available: bool,
   available_version: Option<String>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct DesktopUpdateProgress {
+  phase: String,
+  version: Option<String>,
+  downloaded_bytes: u64,
+  total_bytes: Option<u64>,
+  percent: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1564,8 +1574,80 @@ async fn install_desktop_update(app: AppHandle) -> Result<(), String> {
     .map_err(|error| format!("Unable to check for desktop updates: {error}"))?;
 
   if let Some(update) = update {
+    let available_version = update.version.to_string();
+    let progress_state = Arc::new(Mutex::new((0_u64, None::<u64>)));
+    let _ = app.emit(
+      "desktop-update-progress",
+      DesktopUpdateProgress {
+        phase: "downloading".to_string(),
+        version: Some(available_version.clone()),
+        downloaded_bytes: 0,
+        total_bytes: None,
+        percent: None,
+      },
+    );
+
+    let download_app = app.clone();
+    let download_version = available_version.clone();
+    let download_progress_state = Arc::clone(&progress_state);
+    let install_app = app.clone();
+    let install_version = available_version.clone();
+    let install_progress_state = Arc::clone(&progress_state);
+
     update
-      .download_and_install(|_, _| {}, || {})
+      .download_and_install(
+        move |chunk_length, content_length| {
+          let (downloaded_bytes, total_bytes) = {
+            let mut state = match download_progress_state.lock() {
+              Ok(state) => state,
+              Err(poisoned) => poisoned.into_inner(),
+            };
+
+            state.0 = state.0.saturating_add(chunk_length as u64);
+
+            if let Some(total) = content_length.filter(|total| *total > 0) {
+              state.1 = Some(total);
+            }
+
+            (state.0, state.1)
+          };
+          let percent = total_bytes.map(|total| {
+            ((downloaded_bytes as f64 / total as f64) * 100.0).clamp(0.0, 100.0)
+          });
+
+          let _ = download_app.emit(
+            "desktop-update-progress",
+            DesktopUpdateProgress {
+              phase: "downloading".to_string(),
+              version: Some(download_version.clone()),
+              downloaded_bytes,
+              total_bytes,
+              percent,
+            },
+          );
+        },
+        move || {
+          let (downloaded_bytes, total_bytes) = {
+            let state = match install_progress_state.lock() {
+              Ok(state) => state,
+              Err(poisoned) => poisoned.into_inner(),
+            };
+
+            (state.0, state.1)
+          };
+
+          let _ = install_app.emit(
+            "desktop-update-progress",
+            DesktopUpdateProgress {
+              phase: "installing".to_string(),
+              version: Some(install_version),
+              downloaded_bytes,
+              total_bytes,
+              percent: Some(100.0),
+            },
+          );
+        },
+      )
       .await
       .map_err(|error| format!("Unable to install desktop update: {error}"))?;
   }

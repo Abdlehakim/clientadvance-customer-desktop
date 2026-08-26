@@ -27,6 +27,14 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Progress } from "@/components/ui/progress";
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -91,7 +99,66 @@ interface DesktopUpdateStatus {
   availableVersion: string | null;
 }
 
+type DesktopUpdatePhase = "idle" | "downloading" | "installing";
+
+interface DesktopUpdateProgressPayload {
+  phase: "downloading" | "installing";
+  version: string | null;
+  downloadedBytes: number;
+  totalBytes: number | null;
+  percent: number | null;
+}
+
+interface TauriEvent<T> {
+  payload: T;
+}
+
+interface TauriEventApi {
+  listen<T>(
+    eventName: string,
+    handler: (event: TauriEvent<T>) => void,
+  ): Promise<() => void>;
+}
+
 let activeSyncPromise: Promise<void> | null = null;
+
+function getTauriEventApi() {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  const tauriGlobal = (
+    window as unknown as {
+      __TAURI__?: {
+        event?: TauriEventApi;
+      };
+    }
+  ).__TAURI__;
+
+  return tauriGlobal?.event ?? null;
+}
+
+function formatUpdateBytes(bytes: number) {
+  const normalizedBytes = Number.isFinite(bytes) ? Math.max(0, bytes) : 0;
+
+  if (normalizedBytes < 1024) {
+    return `${Math.round(normalizedBytes)} octets`;
+  }
+
+  const units = ["Ko", "Mo", "Go"] as const;
+  let value = normalizedBytes / 1024;
+  let unitIndex = 0;
+
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+
+  return `${value.toLocaleString("fr-FR", {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  })} ${units[unitIndex]}`;
+}
 
 function createEmptySessionCache(): AppLayoutSessionCache {
   return {
@@ -221,6 +288,15 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   const [desktopUpdateAvailable, setDesktopUpdateAvailable] = useState(false);
   const [desktopCurrentVersion, setDesktopCurrentVersion] = useState<string | null>(null);
   const [desktopAvailableVersion, setDesktopAvailableVersion] = useState<string | null>(null);
+  const [desktopUpdateDialogOpen, setDesktopUpdateDialogOpen] = useState(false);
+  const [desktopUpdatePhase, setDesktopUpdatePhase] =
+    useState<DesktopUpdatePhase>("idle");
+  const [desktopUpdateDownloadedBytes, setDesktopUpdateDownloadedBytes] =
+    useState(0);
+  const [desktopUpdateTotalBytes, setDesktopUpdateTotalBytes] =
+    useState<number | null>(null);
+  const [desktopUpdatePercent, setDesktopUpdatePercent] =
+    useState<number | null>(null);
   const [desktopInstalledVersion, setDesktopInstalledVersion] = useState<string | null>(null);
   const initialUser = mounted ? getCurrentUser() : null;
   const initialUserSessionKey = getUserSessionKey(initialUser);
@@ -274,6 +350,79 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
 
     return () => {
       cancelled = true;
+    };
+  }, [mounted]);
+
+  useEffect(() => {
+    if (!mounted) {
+      return;
+    }
+
+    const eventApi = getTauriEventApi();
+
+    if (!eventApi) {
+      return;
+    }
+
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+
+    void eventApi
+      .listen<DesktopUpdateProgressPayload>(
+        "desktop-update-progress",
+        ({ payload }) => {
+          if (disposed || !desktopUpdateOperationRef.current) {
+            return;
+          }
+
+          const downloadedBytes = Number.isFinite(payload.downloadedBytes)
+            ? Math.max(0, payload.downloadedBytes)
+            : 0;
+          const totalBytes =
+            payload.totalBytes !== null &&
+            Number.isFinite(payload.totalBytes) &&
+            payload.totalBytes > 0
+              ? payload.totalBytes
+              : null;
+
+          if (payload.version?.trim()) {
+            setDesktopAvailableVersion(payload.version);
+          }
+
+          setDesktopUpdateDialogOpen(true);
+          setDesktopUpdateDownloadedBytes(downloadedBytes);
+          setDesktopUpdateTotalBytes(totalBytes);
+
+          if (payload.phase === "installing") {
+            setDesktopUpdatePhase("installing");
+            setDesktopUpdatePercent(100);
+            return;
+          }
+
+          const percent =
+            payload.percent !== null && Number.isFinite(payload.percent)
+              ? Math.min(100, Math.max(0, payload.percent))
+              : null;
+
+          setDesktopUpdatePhase("downloading");
+          setDesktopUpdatePercent(percent);
+        },
+      )
+      .then((unlistenEvent) => {
+        if (disposed) {
+          unlistenEvent();
+          return;
+        }
+
+        unlisten = unlistenEvent;
+      })
+      .catch((error) => {
+        console.error("Unable to listen for desktop update progress.", error);
+      });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
     };
   }, [mounted]);
 
@@ -630,19 +779,35 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
       desktopUpdateOperationRef.current ||
       desktopUpdateChecking ||
       desktopUpdateInstalling ||
-      !desktopUpdateAvailable
+      !desktopUpdateAvailable ||
+      desktopAvailableVersion === null
     ) {
       return;
     }
 
     desktopUpdateOperationRef.current = true;
+    setDesktopUpdateDownloadedBytes(0);
+    setDesktopUpdateTotalBytes(null);
+    setDesktopUpdatePercent(null);
+    setDesktopUpdatePhase("downloading");
+    setDesktopUpdateDialogOpen(true);
     setDesktopUpdateInstalling(true);
 
     try {
       await invokeTauriCommand<void>("install_desktop_update");
       setDesktopUpdateAvailable(false);
       setDesktopAvailableVersion(null);
+      setDesktopUpdateDialogOpen(false);
+      setDesktopUpdatePhase("idle");
+      setDesktopUpdateDownloadedBytes(0);
+      setDesktopUpdateTotalBytes(null);
+      setDesktopUpdatePercent(null);
     } catch {
+      setDesktopUpdateDialogOpen(false);
+      setDesktopUpdatePhase("idle");
+      setDesktopUpdateDownloadedBytes(0);
+      setDesktopUpdateTotalBytes(null);
+      setDesktopUpdatePercent(null);
       toast.error("Impossible d’installer la mise à jour de ClientAdvans.");
     } finally {
       desktopUpdateOperationRef.current = false;
@@ -658,14 +823,22 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   const desktopUpdateTitle = desktopUpdateChecking
     ? "Recherche d’une mise à jour..."
     : desktopUpdateInstalling
-      ? desktopAvailableVersion
-        ? `Installation de la version ${desktopAvailableVersion}...`
-        : "Installation de la mise à jour..."
+      ? desktopUpdatePhase === "installing"
+        ? desktopAvailableVersion
+          ? `Installation de la version ${desktopAvailableVersion}...`
+          : "Installation de la mise à jour..."
+        : desktopAvailableVersion
+          ? `Téléchargement de la version ${desktopAvailableVersion}...`
+          : "Téléchargement de la mise à jour..."
       : desktopUpdateEnabled
         ? `Mettre à jour vers la version ${desktopAvailableVersion}`
         : desktopCurrentVersion
           ? `La version ${desktopCurrentVersion} est à jour.`
           : "Impossible de vérifier les mises à jour.";
+  const desktopUpdateDialogBusy =
+    desktopUpdateInstalling &&
+    (desktopUpdatePhase === "downloading" ||
+      desktopUpdatePhase === "installing");
 
   return (
     <div className="flex h-screen w-full overflow-hidden bg-background">
@@ -971,6 +1144,87 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
           {children}
         </main>
       </div>
+
+      <Dialog
+        open={desktopUpdateDialogOpen}
+        onOpenChange={(open) => {
+          if (!open && desktopUpdateDialogBusy) {
+            return;
+          }
+
+          setDesktopUpdateDialogOpen(open);
+
+          if (!open) {
+            setDesktopUpdatePhase("idle");
+          }
+        }}
+      >
+        <DialogContent
+          className="max-w-md"
+          showCloseButton={!desktopUpdateDialogBusy}
+          onEscapeKeyDown={(event) => {
+            if (desktopUpdateDialogBusy) {
+              event.preventDefault();
+            }
+          }}
+          onPointerDownOutside={(event) => {
+            if (desktopUpdateDialogBusy) {
+              event.preventDefault();
+            }
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>Mise à jour ClientAdvans</DialogTitle>
+            <DialogDescription>
+              {desktopUpdatePhase === "installing"
+                ? "Téléchargement terminé."
+                : `Téléchargement de la version ${desktopAvailableVersion ?? "disponible"}`}
+            </DialogDescription>
+          </DialogHeader>
+
+          {desktopUpdatePhase === "installing" ? (
+            <div className="space-y-3" aria-live="polite">
+              <Progress value={100} aria-label="Téléchargement terminé" />
+              <div className="flex items-center justify-between text-sm">
+                <span>Lancement de l’installation...</span>
+                <span className="font-medium tabular-nums">100 %</span>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-3" aria-live="polite">
+              {desktopUpdatePercent !== null ? (
+                <div className="flex items-center gap-3">
+                  <Progress
+                    value={desktopUpdatePercent}
+                    aria-label="Progression du téléchargement"
+                    className="flex-1"
+                  />
+                  <span className="w-12 text-right text-sm font-medium tabular-nums">
+                    {Math.round(desktopUpdatePercent)} %
+                  </span>
+                </div>
+              ) : (
+                <div
+                  className="h-2 w-full overflow-hidden rounded-full bg-primary/20"
+                  role="progressbar"
+                  aria-label="Téléchargement en cours"
+                  aria-valuetext="Taille totale inconnue"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                >
+                  <div className="h-full w-1/3 animate-pulse rounded-full bg-primary" />
+                </div>
+              )}
+
+              <p className="text-sm text-muted-foreground">
+                {desktopUpdateTotalBytes !== null
+                  ? `${formatUpdateBytes(desktopUpdateDownloadedBytes)} / ${formatUpdateBytes(desktopUpdateTotalBytes)}`
+                  : `${formatUpdateBytes(desktopUpdateDownloadedBytes)} téléchargés`}
+              </p>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
 
       <NotificationsDrawer open={notifOpen} onOpenChange={setNotifOpen} />
       <InitialAdminSetupDialog
