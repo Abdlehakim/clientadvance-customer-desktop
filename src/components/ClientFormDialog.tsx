@@ -42,12 +42,14 @@ export function ClientFormDialog({
 }) {
   const [form, setForm] = useState(emptyForm);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     if (!open) {
       return;
     }
 
+    setIsSubmitting(false);
     setErrors({});
     setForm(
       client
@@ -64,7 +66,7 @@ export function ClientFormDialog({
     );
   }, [client, open]);
 
-  const submit = () => {
+  const submit = async () => {
     const nextErrors: Record<string, string> = {};
 
     if (!form.nom_complet.trim()) {
@@ -96,19 +98,40 @@ export function ClientFormDialog({
       telephone: normalizeTunisianPhone(form.telephone),
     };
 
-    if (client) {
-      updateClient(client.id, payload);
-      toast.success("Client modifi\u00e9");
-    } else {
-      createClient(payload);
-      toast.success("Client ajout\u00e9");
+    if (isSubmitting) {
+      return;
     }
 
-    onOpenChange(false);
+    setIsSubmitting(true);
+
+    try {
+      if (client) {
+        await updateClient(client.id, payload);
+        toast.success("Client modifi\u00e9");
+      } else {
+        await createClient(payload);
+        toast.success("Client ajout\u00e9");
+      }
+
+      onOpenChange(false);
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Impossible d'enregistrer le client.",
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={(value) => {
+        if (!isSubmitting) {
+          onOpenChange(value);
+        }
+      }}
+    >
       <DialogContent className="sm:max-w-[620px]">
         <DialogHeader>
           <DialogTitle>{client ? "Modifier le client" : "Ajouter un client"}</DialogTitle>
@@ -194,10 +217,12 @@ export function ClientFormDialog({
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
             Annuler
           </Button>
-          <Button onClick={submit}>Enregistrer</Button>
+          <Button onClick={() => void submit()} disabled={isSubmitting}>
+            {isSubmitting ? "Enregistrement..." : "Enregistrer"}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

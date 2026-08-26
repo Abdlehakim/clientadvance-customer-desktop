@@ -287,12 +287,12 @@ export const getClient = (id: string) =>
 export const getClientReferenceById = (id: string) =>
   getUnscopedClients().find((client) => client.id === id) ?? null;
 export const createClient = (input: ClientCreateInput) => clientService.create(input);
-export const updateClient = (id: string, patch: ClientUpdateInput) => {
-  void clientService.update(id, patch);
-};
-export const deleteClient = (id: string) => {
-  void clientService.delete(id);
-};
+export const updateClient = (
+  id: string,
+  patch: ClientUpdateInput,
+) => clientService.update(id, patch);
+export const deleteClient = (id: string) =>
+  clientService.delete(id);
 
 export const getPayments = () =>
   filterForCurrentUserDailyScope(

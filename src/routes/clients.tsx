@@ -45,6 +45,7 @@ function ClientsPage() {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Client | null>(null);
   const [toDelete, setToDelete] = useState<Client | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   if (!mounted) {
     return <div className="min-h-screen w-full bg-background" />;
@@ -78,14 +79,24 @@ function ClientsPage() {
     setOpen(true);
   };
 
-  const onDelete = () => {
-    if (!toDelete) {
+  const onDelete = async () => {
+    if (!toDelete || isDeleting) {
       return;
     }
 
-    deleteClient(toDelete.id);
-    toast.success("Client supprim\u00e9");
-    setToDelete(null);
+    setIsDeleting(true);
+
+    try {
+      await deleteClient(toDelete.id);
+      toast.success("Client supprim\u00e9");
+      setToDelete(null);
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Impossible de supprimer le client.",
+      );
+    } finally {
+      setIsDeleting(false);
+    }
   };
 
   return (
@@ -182,7 +193,10 @@ function ClientsPage() {
       </Card>
 
       <ClientFormDialog open={open} onOpenChange={setOpen} client={editing} />
-      <AlertDialog open={!!toDelete} onOpenChange={(value) => !value && setToDelete(null)}>
+      <AlertDialog
+        open={!!toDelete}
+        onOpenChange={(value) => !value && !isDeleting && setToDelete(null)}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Supprimer ce client ?</AlertDialogTitle>
@@ -193,8 +207,16 @@ function ClientsPage() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Annuler</AlertDialogCancel>
-            <AlertDialogAction onClick={onDelete}>Supprimer</AlertDialogAction>
+            <AlertDialogCancel disabled={isDeleting}>Annuler</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(event) => {
+                event.preventDefault();
+                void onDelete();
+              }}
+              disabled={isDeleting}
+            >
+              {isDeleting ? "Suppression..." : "Supprimer"}
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
