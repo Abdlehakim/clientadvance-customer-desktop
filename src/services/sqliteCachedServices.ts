@@ -691,7 +691,14 @@ function collectPendingSyncSnapshot(): PendingSyncSnapshot {
 }
 
 export async function initializeSqliteCache() {
-  const companyScope = requireCurrentCompanyScope();
+  await initializeSqliteDatabase();
+
+  const companyScope = getCurrentCompanyScope();
+
+  if (!companyScope) {
+    clearCacheForCompanyScope(null);
+    return;
+  }
 
   if (cache.companyScope !== companyScope) {
     clearCacheForCompanyScope(companyScope);
@@ -706,7 +713,6 @@ export async function initializeSqliteCache() {
   }
 
   const initializePromise = (async () => {
-    await initializeSqliteDatabase();
     await importLocalStorageSnapshotToSqlite(companyScope);
     await ensureDefaultAdminUser();
     await claimLegacyBusinessDataForCompany(companyScope);

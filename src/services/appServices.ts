@@ -21,6 +21,7 @@ import {
   updateLocalEmployeeAccount as updateStoredLocalEmployeeAccount,
   upsertLocalEmployeeAccount,
 } from "@/infrastructure/auth/offlineAuthStorage";
+import { getCurrentCompanyScope } from "@/infrastructure/auth/currentCompanyScope";
 import {
   BACKEND_SYNC_DISABLED_MESSAGE,
   isBackendSyncEnabled,
@@ -626,6 +627,10 @@ function notificationRetentionCutoffIso(retentionDays: number) {
 async function cleanupSentNotificationsByRetention(skipInitialization = false) {
   if (!skipInitialization) {
     await initializeStorageDriver();
+  }
+
+  if (!getCurrentCompanyScope()) {
+    return 0;
   }
 
   return Promise.resolve(
