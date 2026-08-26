@@ -1632,12 +1632,26 @@ async function claimLegacyBusinessDataForCompany(companyScope: string) {
   const lastSyncKey = getScopedAppStateKey("last_sync", companyScope);
   const smtpPasswordKey = getScopedAppStateKey("smtp_password", companyScope);
 
-  await db.execute("UPDATE clients SET company_id = ? WHERE company_id IS NULL", [companyScope]);
-  await db.execute("UPDATE payments SET company_id = ? WHERE company_id IS NULL", [companyScope]);
-  await db.execute(
+  const claimedClients = await db.execute(
+    `
+      UPDATE clients
+      SET company_id = ?, pending_sync = 1, sync_status = 'pending'
+      WHERE company_id IS NULL
+    `,
+    [companyScope],
+  );
+  const claimedPayments = await db.execute(
+    `
+      UPDATE payments
+      SET company_id = ?, pending_sync = 1, sync_status = 'pending'
+      WHERE company_id IS NULL
+    `,
+    [companyScope],
+  );
+  const claimedSettings = await db.execute(
     `
       UPDATE admin_settings
-      SET id = ?, company_id = ?
+      SET id = ?, company_id = ?, pending_sync = 1, sync_status = 'pending'
       WHERE company_id IS NULL
         AND (SELECT COUNT(*) FROM admin_settings WHERE company_id IS NULL) = 1
         AND NOT EXISTS (
@@ -1648,20 +1662,44 @@ async function claimLegacyBusinessDataForCompany(companyScope: string) {
     `,
     [settingsId, companyScope, companyScope, settingsId],
   );
-  await db.execute("UPDATE activity_logs SET company_id = ? WHERE company_id IS NULL", [companyScope]);
-  await db.execute("UPDATE notification_queue SET company_id = ? WHERE company_id IS NULL", [companyScope]);
-
-  await db.execute(
+  const claimedLogs = await db.execute(
     `
-      INSERT INTO app_state (key, value, updated_at)
-      SELECT ?, value, CURRENT_TIMESTAMP
-      FROM app_state
-      WHERE key = 'last_sync'
-        AND NOT EXISTS (SELECT 1 FROM app_state WHERE key = ?)
-      LIMIT 1
+      UPDATE activity_logs
+      SET company_id = ?, pending_sync = 1, sync_status = 'pending'
+      WHERE company_id IS NULL
     `,
-    [lastSyncKey, lastSyncKey],
+    [companyScope],
   );
+  const claimedNotifications = await db.execute(
+    `
+      UPDATE notification_queue
+      SET company_id = ?, pending_sync = 1, sync_status = 'pending'
+      WHERE company_id IS NULL
+    `,
+    [companyScope],
+  );
+  const claimedLegacyBusinessData =
+    claimedClients.rowsAffected > 0 ||
+    claimedPayments.rowsAffected > 0 ||
+    claimedSettings.rowsAffected > 0 ||
+    claimedLogs.rowsAffected > 0 ||
+    claimedNotifications.rowsAffected > 0;
+
+  if (claimedLegacyBusinessData) {
+    await db.execute("DELETE FROM app_state WHERE key = ?", [lastSyncKey]);
+  } else {
+    await db.execute(
+      `
+        INSERT INTO app_state (key, value, updated_at)
+        SELECT ?, value, CURRENT_TIMESTAMP
+        FROM app_state
+        WHERE key = 'last_sync'
+          AND NOT EXISTS (SELECT 1 FROM app_state WHERE key = ?)
+        LIMIT 1
+      `,
+      [lastSyncKey, lastSyncKey],
+    );
+  }
   await db.execute(
     `
       INSERT INTO app_state (key, value, updated_at)
