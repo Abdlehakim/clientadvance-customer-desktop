@@ -4,6 +4,7 @@ import type {
 } from "@/domain/repositories";
 import type { NotificationCreateInput, NotificationItem, NotificationStatus } from "@/domain/types";
 import { uid } from "@/infrastructure/local/localStorageDatabase";
+import { requireCurrentCompanyScope } from "@/infrastructure/auth/currentCompanyScope";
 import { getDb, type SqliteRow } from "./sqliteClient";
 
 interface NotificationSqliteRow extends SqliteRow {
@@ -79,6 +80,7 @@ function toNotification(row: NotificationSqliteRow): NotificationItem {
 
 export const notificationSQLiteRepository: NotificationRepository = {
   async getAll() {
+    const companyScope = requireCurrentCompanyScope();
     const db = await getDb();
     const rows = await db.query<NotificationSqliteRow>(
       `
@@ -96,13 +98,16 @@ export const notificationSQLiteRepository: NotificationRepository = {
           pending_sync,
           sync_status
         FROM notification_queue
+        WHERE company_id = ?
         ORDER BY created_at DESC
       `,
+      [companyScope],
     );
 
     return rows.map(toNotification);
   },
   async create(input: NotificationCreateInput) {
+    const companyScope = requireCurrentCompanyScope();
     const notification: NotificationItem = {
       ...input,
       id: uid(),
@@ -119,6 +124,7 @@ export const notificationSQLiteRepository: NotificationRepository = {
       `
         INSERT INTO notification_queue (
           id,
+          company_id,
           type,
           recipient,
           subject,
@@ -130,10 +136,11 @@ export const notificationSQLiteRepository: NotificationRepository = {
           sent_at,
           pending_sync,
           sync_status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         notification.id,
+        companyScope,
         notification.type,
         notification.recipient,
         notification.subject,
@@ -151,6 +158,7 @@ export const notificationSQLiteRepository: NotificationRepository = {
     return notification;
   },
   async markAsSending(id: string) {
+    const companyScope = requireCurrentCompanyScope();
     const db = await getDb();
 
     await db.execute(
@@ -163,11 +171,13 @@ export const notificationSQLiteRepository: NotificationRepository = {
           pending_sync = ?,
           sync_status = ?
         WHERE id = ?
+          AND company_id = ?
       `,
-      ["sending", null, null, 1, "pending", id],
+      ["sending", null, null, 1, "pending", id, companyScope],
     );
   },
   async markAsSent(id: string) {
+    const companyScope = requireCurrentCompanyScope();
     const db = await getDb();
 
     await db.execute(
@@ -180,11 +190,13 @@ export const notificationSQLiteRepository: NotificationRepository = {
           pending_sync = ?,
           sync_status = ?
         WHERE id = ?
+          AND company_id = ?
       `,
-      ["sent", null, new Date().toISOString(), 1, "pending", id],
+      ["sent", null, new Date().toISOString(), 1, "pending", id, companyScope],
     );
   },
   async markAsFailed(id: string, errorMessage?: string) {
+    const companyScope = requireCurrentCompanyScope();
     const db = await getDb();
 
     await db.execute(
@@ -197,6 +209,7 @@ export const notificationSQLiteRepository: NotificationRepository = {
           pending_sync = ?,
           sync_status = ?
         WHERE id = ?
+          AND company_id = ?
       `,
       [
         "failed",
@@ -205,13 +218,15 @@ export const notificationSQLiteRepository: NotificationRepository = {
         1,
         "pending",
         id,
+        companyScope,
       ],
     );
   },
   async clearSent(options: ClearSentNotificationsOptions = {}) {
+    const companyScope = requireCurrentCompanyScope();
     const db = await getDb();
-    const conditions = ["status = ?"];
-    const params: Array<string | number | boolean | null> = ["sent"];
+    const conditions = ["company_id = ?", "status = ?"];
+    const params: Array<string | number | boolean | null> = [companyScope, "sent"];
 
     if (options.syncedOnly) {
       conditions.push("pending_sync = 0");

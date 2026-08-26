@@ -4,6 +4,7 @@ import {
   normalizeSmtpPasswordValue,
 } from "./adminSettingsState";
 import { KEYS, isBrowser, read } from "./localStorageDatabase";
+import { getScopedAppStateKey } from "@/infrastructure/auth/currentCompanyScope";
 
 const SMTP_PASSWORD_STATE_KEY = "smtp_password";
 
@@ -21,6 +22,7 @@ function readString(value: unknown) {
 
 export async function getStoredSmtpPassword() {
   if (usesSqliteSmtpSecretStore()) {
+    const stateKey = getScopedAppStateKey(SMTP_PASSWORD_STATE_KEY);
     const db = await getDb();
     const rows = await db.query<AppStateRow>(
       `
@@ -29,7 +31,7 @@ export async function getStoredSmtpPassword() {
         WHERE key = ?
         LIMIT 1
       `,
-      [SMTP_PASSWORD_STATE_KEY],
+      [stateKey],
     );
 
     return normalizeSmtpPasswordValue(readString(rows[0]?.value));
@@ -47,6 +49,7 @@ export async function persistStoredSmtpPassword(password: string) {
 
   // TODO: move SMTP password to secure Tauri storage before production.
   if (usesSqliteSmtpSecretStore()) {
+    const stateKey = getScopedAppStateKey(SMTP_PASSWORD_STATE_KEY);
     const db = await getDb();
     await db.execute(
       `
@@ -56,7 +59,7 @@ export async function persistStoredSmtpPassword(password: string) {
           value = excluded.value,
           updated_at = CURRENT_TIMESTAMP
       `,
-      [SMTP_PASSWORD_STATE_KEY, normalizedPassword || null],
+      [stateKey, normalizedPassword || null],
     );
     return;
   }

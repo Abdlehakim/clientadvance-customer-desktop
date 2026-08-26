@@ -1,6 +1,7 @@
 import type { ActivityLogRepository } from "@/domain/repositories";
 import type { ActivityLog, ActivityLogCreateInput } from "@/domain/types";
 import { uid } from "@/infrastructure/local/localStorageDatabase";
+import { requireCurrentCompanyScope } from "@/infrastructure/auth/currentCompanyScope";
 import {
   ACTIVITY_LOG_RETENTION_DAYS,
   getActivityLogRetentionCutoffIso,
@@ -61,14 +62,18 @@ function toActivityLog(row: ActivityLogSqliteRow): ActivityLog {
   };
 }
 
-export async function cleanupOldActivityLogs(retentionDays = ACTIVITY_LOG_RETENTION_DAYS) {
+export async function cleanupOldActivityLogs(
+  retentionDays = ACTIVITY_LOG_RETENTION_DAYS,
+  companyScope = requireCurrentCompanyScope(),
+) {
   const db = await getDb();
   const result = await db.execute(
     `
       DELETE FROM activity_logs
-      WHERE created_at < ?
+      WHERE company_id = ?
+        AND created_at < ?
     `,
-    [getActivityLogRetentionCutoffIso(retentionDays)],
+    [companyScope, getActivityLogRetentionCutoffIso(retentionDays)],
   );
 
   return result.rowsAffected;
@@ -76,7 +81,8 @@ export async function cleanupOldActivityLogs(retentionDays = ACTIVITY_LOG_RETENT
 
 export const activityLogSQLiteRepository: ActivityLogRepository = {
   async getAll() {
-    await cleanupOldActivityLogs();
+    const companyScope = requireCurrentCompanyScope();
+    await cleanupOldActivityLogs(ACTIVITY_LOG_RETENTION_DAYS, companyScope);
 
     const db = await getDb();
     const rows = await db.query<ActivityLogSqliteRow>(
@@ -93,14 +99,17 @@ export const activityLogSQLiteRepository: ActivityLogRepository = {
           pending_sync,
           sync_status
         FROM activity_logs
+        WHERE company_id = ?
         ORDER BY created_at DESC
       `,
+      [companyScope],
     );
 
     return rows.map(toActivityLog);
   },
   async create(input: ActivityLogCreateInput) {
-    await cleanupOldActivityLogs();
+    const companyScope = requireCurrentCompanyScope();
+    await cleanupOldActivityLogs(ACTIVITY_LOG_RETENTION_DAYS, companyScope);
 
     const log: ActivityLog = {
       ...input,
@@ -115,6 +124,7 @@ export const activityLogSQLiteRepository: ActivityLogRepository = {
       `
         INSERT INTO activity_logs (
           id,
+          company_id,
           user_id,
           user_name,
           action_type,
@@ -124,10 +134,11 @@ export const activityLogSQLiteRepository: ActivityLogRepository = {
           created_at,
           pending_sync,
           sync_status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         log.id,
+        companyScope,
         log.user_id,
         log.user_name,
         log.action_type,

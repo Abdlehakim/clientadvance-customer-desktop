@@ -59,6 +59,7 @@ PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS clients (
   id TEXT PRIMARY KEY,
+  company_id TEXT,
   nom_complet TEXT NOT NULL,
   telephone TEXT NOT NULL DEFAULT '',
   adresse TEXT NOT NULL DEFAULT '',
@@ -78,6 +79,7 @@ CREATE TABLE IF NOT EXISTS clients (
 
 CREATE TABLE IF NOT EXISTS payments (
   id TEXT PRIMARY KEY,
+  company_id TEXT,
   client_id TEXT NOT NULL REFERENCES clients(id),
   montant REAL NOT NULL,
   date_paiement TEXT NOT NULL,
@@ -91,6 +93,7 @@ CREATE TABLE IF NOT EXISTS payments (
 
 CREATE TABLE IF NOT EXISTS admin_settings (
   id TEXT PRIMARY KEY,
+  company_id TEXT,
   admin_email TEXT NOT NULL DEFAULT '',
   admin_whatsapp TEXT NOT NULL DEFAULT '',
   notification_retention_days INTEGER NOT NULL DEFAULT 30,
@@ -114,6 +117,7 @@ CREATE TABLE IF NOT EXISTS admin_settings (
 
 CREATE TABLE IF NOT EXISTS activity_logs (
   id TEXT PRIMARY KEY,
+  company_id TEXT,
   user_id TEXT NOT NULL DEFAULT '',
   user_name TEXT NOT NULL,
   action_type TEXT NOT NULL,
@@ -127,6 +131,7 @@ CREATE TABLE IF NOT EXISTS activity_logs (
 
 CREATE TABLE IF NOT EXISTS notification_queue (
   id TEXT PRIMARY KEY,
+  company_id TEXT,
   type TEXT NOT NULL,
   recipient TEXT NOT NULL,
   subject TEXT NOT NULL DEFAULT '',
@@ -853,6 +858,11 @@ fn add_column_if_missing(
 }
 
 fn ensure_schema_upgrades(connection: &Connection) -> Result<(), String> {
+  add_column_if_missing(connection, "clients", "company_id", "TEXT")?;
+  add_column_if_missing(connection, "payments", "company_id", "TEXT")?;
+  add_column_if_missing(connection, "admin_settings", "company_id", "TEXT")?;
+  add_column_if_missing(connection, "activity_logs", "company_id", "TEXT")?;
+  add_column_if_missing(connection, "notification_queue", "company_id", "TEXT")?;
   add_column_if_missing(
     connection,
     "clients",
@@ -1084,6 +1094,31 @@ fn ensure_schema_upgrades(connection: &Connection) -> Result<(), String> {
         END
       ",
       [],
+    )
+    .map_err(|error| error.to_string())?;
+
+  connection
+    .execute_batch(
+      "
+        CREATE INDEX IF NOT EXISTS idx_clients_company_id
+          ON clients(company_id);
+        CREATE INDEX IF NOT EXISTS idx_clients_company_deleted_at
+          ON clients(company_id, deleted_at);
+        CREATE INDEX IF NOT EXISTS idx_clients_company_remote_updated_at
+          ON clients(company_id, remote_updated_at);
+        CREATE INDEX IF NOT EXISTS idx_payments_company_id
+          ON payments(company_id);
+        CREATE INDEX IF NOT EXISTS idx_payments_company_client_id
+          ON payments(company_id, client_id);
+        CREATE INDEX IF NOT EXISTS idx_payments_company_remote_updated_at
+          ON payments(company_id, remote_updated_at);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_admin_settings_company_id
+          ON admin_settings(company_id);
+        CREATE INDEX IF NOT EXISTS idx_activity_logs_company_created_at
+          ON activity_logs(company_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_notification_queue_company_status_created_at
+          ON notification_queue(company_id, status, created_at);
+      ",
     )
     .map_err(|error| error.to_string())?;
 

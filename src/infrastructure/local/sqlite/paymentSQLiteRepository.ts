@@ -2,11 +2,12 @@ import type { PaymentRepository } from "@/domain/repositories";
 import type { AdminSettings, Client, Payment, PaymentCreateInput } from "@/domain/types";
 import { formatTND } from "@/lib/format";
 import { getCurrentUserSession } from "@/infrastructure/auth/currentUserSession";
+import { requireCurrentCompanyScope } from "@/infrastructure/auth/currentCompanyScope";
 import { uid } from "@/infrastructure/local/localStorageDatabase";
 import { buildPaymentNotifications } from "@/services/paymentNotificationService";
 import { activityLogSQLiteRepository } from "./activityLogSQLiteRepository";
 import { adminSettingsSQLiteRepository } from "./adminSettingsSQLiteRepository";
-import { clientSQLiteRepository } from "./clientSQLiteRepository";
+import { getScopedClientById } from "./clientSQLiteRepository";
 import { notificationSQLiteRepository } from "./notificationSQLiteRepository";
 import { getDb, type SqliteRow } from "./sqliteClient";
 
@@ -90,26 +91,30 @@ function toPayment(row: PaymentSqliteRow): Payment {
   };
 }
 
-async function getPaymentClient(clientId: string): Promise<PaymentClient | null> {
-  const sqliteClient = await clientSQLiteRepository.getById(clientId);
+async function getPaymentClient(
+  clientId: string,
+  companyScope: string,
+): Promise<PaymentClient | null> {
+  const sqliteClient = await getScopedClientById(clientId, companyScope);
   return sqliteClient ? (sqliteClient as PaymentClient) : null;
 }
 
-async function getClientTotalPaid(clientId: string) {
+async function getClientTotalPaid(clientId: string, companyScope: string) {
   const db = await getDb();
   const rows = await db.query<PaymentTotalRow>(
     `
       SELECT COALESCE(SUM(montant), 0) AS total_paid
       FROM payments
       WHERE client_id = ?
+        AND company_id = ?
     `,
-    [clientId],
+    [clientId, companyScope],
   );
 
   return readNumber(rows[0]?.total_paid);
 }
 
-async function getExistingPayment(id: string) {
+async function getExistingPayment(id: string, companyScope: string) {
   const db = await getDb();
   const rows = await db.query<PaymentSqliteRow>(
     `
@@ -126,9 +131,10 @@ async function getExistingPayment(id: string) {
         sync_status
       FROM payments
       WHERE id = ?
+        AND company_id = ?
       LIMIT 1
     `,
-    [id],
+    [id, companyScope],
   );
 
   return rows[0] ? toPayment(rows[0]) : null;
@@ -156,6 +162,7 @@ async function queuePaymentNotifications(
 
 export const paymentSQLiteRepository: PaymentRepository = {
   async getAll() {
+    const companyScope = requireCurrentCompanyScope();
     const db = await getDb();
     const rows = await db.query<PaymentSqliteRow>(
       `
@@ -171,13 +178,16 @@ export const paymentSQLiteRepository: PaymentRepository = {
           pending_sync,
           sync_status
         FROM payments
+        WHERE company_id = ?
         ORDER BY created_at DESC
       `,
+      [companyScope],
     );
 
     return rows.map(toPayment);
   },
   async getByClientId(clientId) {
+    const companyScope = requireCurrentCompanyScope();
     const db = await getDb();
     const rows = await db.query<PaymentSqliteRow>(
       `
@@ -194,14 +204,20 @@ export const paymentSQLiteRepository: PaymentRepository = {
           sync_status
         FROM payments
         WHERE client_id = ?
+          AND company_id = ?
         ORDER BY created_at DESC
       `,
-      [clientId],
+      [clientId, companyScope],
     );
 
     return rows.map(toPayment);
   },
   async create(input: PaymentCreateInput) {
+    const companyScope = requireCurrentCompanyScope();
+    const client = await getPaymentClient(input.client_id, companyScope);
+    if (!client) {
+      throw new Error("Client introuvable.");
+    }
     const user = getCurrentUserSession();
     const now = new Date().toISOString();
     const payment: Payment = {
@@ -220,6 +236,7 @@ export const paymentSQLiteRepository: PaymentRepository = {
       `
         INSERT INTO payments (
           id,
+          company_id,
           client_id,
           montant,
           date_paiement,
@@ -229,10 +246,11 @@ export const paymentSQLiteRepository: PaymentRepository = {
           remote_updated_at,
           pending_sync,
           sync_status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         payment.id,
+        companyScope,
         payment.client_id,
         payment.montant,
         payment.date_paiement,
@@ -245,10 +263,7 @@ export const paymentSQLiteRepository: PaymentRepository = {
       ],
     );
 
-    const [client, totalPaid] = await Promise.all([
-      getPaymentClient(payment.client_id),
-      getClientTotalPaid(payment.client_id),
-    ]);
+    const totalPaid = await getClientTotalPaid(payment.client_id, companyScope);
     await activityLogSQLiteRepository.create({
       user_id: user?.id ?? "",
       user_name: user?.name ?? "-",
@@ -270,30 +285,33 @@ export const paymentSQLiteRepository: PaymentRepository = {
     return payment;
   },
   async delete(id: string) {
-    const payment = await getExistingPayment(id);
+    const companyScope = requireCurrentCompanyScope();
+    const payment = await getExistingPayment(id, companyScope);
 
     if (!payment) {
       return;
     }
 
     const user = getCurrentUserSession();
-    const client = await getPaymentClient(payment.client_id);
+    const client = await getPaymentClient(payment.client_id, companyScope);
     const db = await getDb();
 
     await db.execute(
       `
         DELETE FROM payments
         WHERE id = ?
+          AND company_id = ?
       `,
-      [id],
+      [id, companyScope],
     );
     await db.execute(
       `
         DELETE FROM notification_queue
         WHERE payment_id = ?
+          AND company_id = ?
           AND (status IS NULL OR status IN (?, ?))
       `,
-      [id, "queued", "sending"],
+      [id, companyScope, "queued", "sending"],
     );
 
     await activityLogSQLiteRepository.create({

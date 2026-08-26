@@ -1,6 +1,7 @@
 import type { ClientRepository } from "@/domain/repositories";
 import type { Client, ClientCreateInput, ClientUpdateInput } from "@/domain/types";
 import { getCurrentUserSession } from "@/infrastructure/auth/currentUserSession";
+import { requireCurrentCompanyScope } from "@/infrastructure/auth/currentCompanyScope";
 import { uid } from "@/infrastructure/local/localStorageDatabase";
 import { normalizeStoredTunisianPhone } from "@/lib/tunisianPhone";
 import { activityLogSQLiteRepository } from "./activityLogSQLiteRepository";
@@ -77,7 +78,7 @@ function toClient(row: ClientSqliteRow): Client {
   };
 }
 
-async function getExistingClient(id: string) {
+async function getExistingClient(id: string, companyScope: string) {
   const db = await getDb();
   const rows = await db.query<ClientSqliteRow>(
     `
@@ -100,16 +101,23 @@ async function getExistingClient(id: string) {
         sync_status
       FROM clients
       WHERE id = ?
+        AND company_id = ?
       LIMIT 1
     `,
-    [id],
+    [id, companyScope],
   );
 
   return rows[0] ? toClient(rows[0]) : null;
 }
 
+export async function getScopedClientById(id: string, companyScope: string) {
+  const client = await getExistingClient(id, companyScope);
+  return client?.deleted_at ? null : client;
+}
+
 export const clientSQLiteRepository: ClientRepository = {
   async getAll() {
+    const companyScope = requireCurrentCompanyScope();
     const db = await getDb();
     const rows = await db.query<ClientSqliteRow>(
       `
@@ -131,14 +139,17 @@ export const clientSQLiteRepository: ClientRepository = {
           pending_sync,
           sync_status
         FROM clients
-        WHERE deleted_at IS NULL
+        WHERE company_id = ?
+          AND deleted_at IS NULL
         ORDER BY created_at DESC
       `,
+      [companyScope],
     );
 
     return rows.map(toClient);
   },
   async getById(id) {
+    const companyScope = requireCurrentCompanyScope();
     const db = await getDb();
     const rows = await db.query<ClientSqliteRow>(
       `
@@ -161,15 +172,17 @@ export const clientSQLiteRepository: ClientRepository = {
           sync_status
         FROM clients
         WHERE id = ?
+          AND company_id = ?
           AND deleted_at IS NULL
         LIMIT 1
       `,
-      [id],
+      [id, companyScope],
     );
 
     return rows[0] ? toClient(rows[0]) : null;
   },
   async create(input: ClientCreateInput) {
+    const companyScope = requireCurrentCompanyScope();
     const user = getCurrentUserSession();
     const now = new Date().toISOString();
     const nextInput = {
@@ -196,6 +209,7 @@ export const clientSQLiteRepository: ClientRepository = {
       `
         INSERT INTO clients (
           id,
+          company_id,
           nom_complet,
           telephone,
           adresse,
@@ -211,10 +225,11 @@ export const clientSQLiteRepository: ClientRepository = {
           remote_updated_at,
           pending_sync,
           sync_status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         client.id,
+        companyScope,
         client.nom_complet,
         client.telephone,
         client.adresse,
@@ -244,7 +259,8 @@ export const clientSQLiteRepository: ClientRepository = {
     return client;
   },
   async update(id: string, patch: ClientUpdateInput) {
-    const current = await getExistingClient(id);
+    const companyScope = requireCurrentCompanyScope();
+    const current = await getExistingClient(id, companyScope);
     const user = getCurrentUserSession();
     const now = new Date().toISOString();
 
@@ -288,6 +304,7 @@ export const clientSQLiteRepository: ClientRepository = {
           pending_sync = ?,
           sync_status = ?
         WHERE id = ?
+          AND company_id = ?
       `,
       [
         next.nom_complet,
@@ -303,6 +320,7 @@ export const clientSQLiteRepository: ClientRepository = {
         1,
         next.sync_status,
         id,
+        companyScope,
       ],
     );
 
@@ -316,7 +334,8 @@ export const clientSQLiteRepository: ClientRepository = {
     });
   },
   async delete(id: string) {
-    const current = await getExistingClient(id);
+    const companyScope = requireCurrentCompanyScope();
+    const current = await getExistingClient(id, companyScope);
     const user = getCurrentUserSession();
     const deletedAt = new Date().toISOString();
 
@@ -336,6 +355,7 @@ export const clientSQLiteRepository: ClientRepository = {
           pending_sync = ?,
           sync_status = ?
         WHERE id = ?
+          AND company_id = ?
       `,
       [
         deletedAt,
@@ -345,6 +365,7 @@ export const clientSQLiteRepository: ClientRepository = {
         1,
         "pending",
         id,
+        companyScope,
       ],
     );
 

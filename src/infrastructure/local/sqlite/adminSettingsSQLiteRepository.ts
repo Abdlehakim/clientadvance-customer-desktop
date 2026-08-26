@@ -2,6 +2,10 @@ import type { AdminSettingsRepository } from "@/domain/repositories";
 import type { AdminSettings } from "@/domain/types";
 import { getCurrentUserSession } from "@/infrastructure/auth/currentUserSession";
 import {
+  getCompanySettingsId,
+  requireCurrentCompanyScope,
+} from "@/infrastructure/auth/currentCompanyScope";
+import {
   applyAdminSettingsUpdate,
   createAdminSettingsFallback,
   normalizeSmtpPasswordValue,
@@ -10,8 +14,6 @@ import {
 import { getStoredSmtpPassword, persistStoredSmtpPassword } from "@/infrastructure/local/smtpPasswordStorage";
 import { activityLogSQLiteRepository } from "./activityLogSQLiteRepository";
 import { getDb, type SqliteRow } from "./sqliteClient";
-
-const SETTINGS_ID = "settings_default";
 
 interface AdminSettingsSqliteRow extends SqliteRow {
   id: unknown;
@@ -36,8 +38,8 @@ interface AdminSettingsSqliteRow extends SqliteRow {
   sync_status: unknown;
 }
 
-function fallback(): AdminSettings {
-  return createAdminSettingsFallback();
+function fallback(settingsId: string): AdminSettings {
+  return { ...createAdminSettingsFallback(), id: settingsId };
 }
 
 function readString(value: unknown, defaultValue = "") {
@@ -86,9 +88,9 @@ function readSyncStatus(value: unknown): AdminSettings["sync_status"] {
     : "synced";
 }
 
-function toAdminSettings(row: AdminSettingsSqliteRow): AdminSettings {
+function toAdminSettings(row: AdminSettingsSqliteRow, settingsId: string): AdminSettings {
   return normalizeAdminSettings({
-    id: readString(row.id, SETTINGS_ID),
+    id: readString(row.id, settingsId),
     admin_email: readString(row.admin_email),
     admin_whatsapp: readString(row.admin_whatsapp),
     notification_retention_days: readNumber(row.notification_retention_days, 30),
@@ -113,6 +115,8 @@ function toAdminSettings(row: AdminSettingsSqliteRow): AdminSettings {
 
 export const adminSettingsSQLiteRepository: AdminSettingsRepository = {
   async get() {
+    const companyScope = requireCurrentCompanyScope();
+    const settingsId = getCompanySettingsId(companyScope);
     const db = await getDb();
     const rows = await db.query<AdminSettingsSqliteRow>(
       `
@@ -138,15 +142,17 @@ export const adminSettingsSQLiteRepository: AdminSettingsRepository = {
           pending_sync,
           sync_status
         FROM admin_settings
-        WHERE id = ?
+        WHERE company_id = ?
         LIMIT 1
       `,
-      [SETTINGS_ID],
+      [companyScope],
     );
 
-    return rows[0] ? toAdminSettings(rows[0]) : fallback();
+    return rows[0] ? toAdminSettings(rows[0], settingsId) : fallback(settingsId);
   },
   async update(patch) {
+    const companyScope = requireCurrentCompanyScope();
+    const settingsId = getCompanySettingsId(companyScope);
     const user = getCurrentUserSession();
 
     if (user?.role !== "admin") {
@@ -157,13 +163,13 @@ export const adminSettingsSQLiteRepository: AdminSettingsRepository = {
     const updatedAt = new Date().toISOString();
     const nextPassword = normalizeSmtpPasswordValue(patch.smtp_password);
     const hasStoredPassword = (await getStoredSmtpPassword()).length > 0;
-    const next = applyAdminSettingsUpdate(current, patch, {
+    const next = { ...applyAdminSettingsUpdate(current, patch, {
       updatedAt,
       updatedBy: user?.name ?? current.updated_by ?? "",
       smtpPasswordConfigured: nextPassword
         ? true
         : current.smtp_password_configured || hasStoredPassword,
-    });
+    }), id: settingsId };
     const db = await getDb();
 
     if (nextPassword) {
@@ -174,6 +180,7 @@ export const adminSettingsSQLiteRepository: AdminSettingsRepository = {
       `
         INSERT INTO admin_settings (
           id,
+          company_id,
           admin_email,
           admin_whatsapp,
           notification_retention_days,
@@ -193,8 +200,8 @@ export const adminSettingsSQLiteRepository: AdminSettingsRepository = {
           remote_updated_at,
           pending_sync,
           sync_status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(company_id) DO UPDATE SET
           admin_email = excluded.admin_email,
           admin_whatsapp = excluded.admin_whatsapp,
           notification_retention_days = excluded.notification_retention_days,
@@ -214,9 +221,11 @@ export const adminSettingsSQLiteRepository: AdminSettingsRepository = {
           remote_updated_at = excluded.remote_updated_at,
           pending_sync = excluded.pending_sync,
           sync_status = excluded.sync_status
+        WHERE admin_settings.company_id = excluded.company_id
       `,
       [
         next.id,
+        companyScope,
         next.admin_email,
         next.admin_whatsapp,
         next.notification_retention_days,
@@ -245,7 +254,7 @@ export const adminSettingsSQLiteRepository: AdminSettingsRepository = {
       action_type: "settings_update",
       description: "Mise à jour des paramètres administrateur",
       entity_type: "settings",
-      entity_id: SETTINGS_ID,
+      entity_id: settingsId,
     });
   },
 };

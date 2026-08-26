@@ -12,6 +12,16 @@ import type {
   PaymentCreateInput,
 } from "@/domain/types";
 import { ensureDefaultAdminUser } from "@/infrastructure/auth/seedDefaultAdmin";
+import {
+  getCompanySettingsId,
+  getCurrentCompanyScope,
+  getScopedAppStateKey,
+  requireCurrentCompanyScope,
+} from "@/infrastructure/auth/currentCompanyScope";
+import {
+  getCurrentUserSession,
+  subscribeCurrentUserSession,
+} from "@/infrastructure/auth/currentUserSession";
 import type {
   ActivityLogRepository,
   AdminSettingsRepository,
@@ -54,13 +64,18 @@ import type {
 } from "@/infrastructure/remote/syncRemoteService";
 import { filterActivityLogsByRetention } from "@/services/activityLogRetention";
 
-function emptySettings(): AdminSettings {
-  return createAdminSettingsFallback();
+function emptySettings(companyScope?: string | null): AdminSettings {
+  const fallback = createAdminSettingsFallback();
+  return companyScope
+    ? { ...fallback, id: getCompanySettingsId(companyScope) }
+    : fallback;
 }
 
 interface SqliteCacheState {
   initialized: boolean;
   initializePromise: Promise<void> | null;
+  initializeScope: string | null;
+  companyScope: string | null;
   clients: Client[];
   payments: Payment[];
   settings: AdminSettings;
@@ -72,6 +87,8 @@ interface SqliteCacheState {
 const cache: SqliteCacheState = {
   initialized: false,
   initializePromise: null,
+  initializeScope: null,
+  companyScope: null,
   clients: [],
   payments: [],
   settings: emptySettings(),
@@ -341,9 +358,9 @@ function toPayment(row: PaymentRow): Payment {
   };
 }
 
-function toAdminSettings(row: AdminSettingsRow): AdminSettings {
+function toAdminSettings(row: AdminSettingsRow, settingsId: string): AdminSettings {
   return normalizeAdminSettings({
-    id: readString(row.id, "settings_default"),
+    id: readString(row.id, settingsId),
     admin_email: readString(row.admin_email),
     admin_whatsapp: readString(row.admin_whatsapp),
     notification_retention_days: readNumber(row.notification_retention_days, 30),
@@ -405,7 +422,7 @@ function toNotification(row: NotificationRow): NotificationItem {
   };
 }
 
-async function loadClientsFromSqlite() {
+async function loadClientsFromSqlite(companyScope: string) {
   const db = await getDb();
   const rows = await db.query<ClientRow>(
     `
@@ -427,14 +444,16 @@ async function loadClientsFromSqlite() {
         pending_sync,
         sync_status
       FROM clients
+      WHERE company_id = ?
       ORDER BY created_at DESC
     `,
+    [companyScope],
   );
 
   return rows.map(toClient);
 }
 
-async function loadPaymentsFromSqlite() {
+async function loadPaymentsFromSqlite(companyScope: string) {
   const db = await getDb();
   const rows = await db.query<PaymentRow>(
     `
@@ -450,14 +469,17 @@ async function loadPaymentsFromSqlite() {
         pending_sync,
         sync_status
       FROM payments
+      WHERE company_id = ?
       ORDER BY created_at DESC
     `,
+    [companyScope],
   );
 
   return rows.map(toPayment);
 }
 
-async function loadSettingsFromSqlite() {
+async function loadSettingsFromSqlite(companyScope: string) {
+  const settingsId = getCompanySettingsId(companyScope);
   const db = await getDb();
   const rows = await db.query<AdminSettingsRow>(
     `
@@ -483,16 +505,17 @@ async function loadSettingsFromSqlite() {
         pending_sync,
         sync_status
       FROM admin_settings
-      WHERE id = 'settings_default'
+      WHERE company_id = ?
       LIMIT 1
     `,
+    [companyScope],
   );
 
-  return rows[0] ? toAdminSettings(rows[0]) : emptySettings();
+  return rows[0] ? toAdminSettings(rows[0], settingsId) : emptySettings(companyScope);
 }
 
-async function loadLogsFromSqlite() {
-  await cleanupSqliteActivityLogs();
+async function loadLogsFromSqlite(companyScope: string) {
+  await cleanupSqliteActivityLogs(undefined, companyScope);
 
   const db = await getDb();
   const rows = await db.query<ActivityLogRow>(
@@ -509,14 +532,16 @@ async function loadLogsFromSqlite() {
         pending_sync,
         sync_status
       FROM activity_logs
+      WHERE company_id = ?
       ORDER BY created_at DESC
     `,
+    [companyScope],
   );
 
   return rows.map(toActivityLog);
 }
 
-async function loadNotificationsFromSqlite() {
+async function loadNotificationsFromSqlite(companyScope: string) {
   const db = await getDb();
   const rows = await db.query<NotificationRow>(
     `
@@ -534,36 +559,44 @@ async function loadNotificationsFromSqlite() {
         pending_sync,
         sync_status
       FROM notification_queue
+      WHERE company_id = ?
       ORDER BY created_at DESC
     `,
+    [companyScope],
   );
 
   return rows.map(toNotification);
 }
 
-async function loadLastSyncFromSqlite() {
+async function loadLastSyncFromSqlite(companyScope: string) {
+  const stateKey = getScopedAppStateKey("last_sync", companyScope);
   const db = await getDb();
   const rows = await db.query<AppStateRow>(
     `
       SELECT value
       FROM app_state
-      WHERE key = 'last_sync'
+      WHERE key = ?
       LIMIT 1
     `,
+    [stateKey],
   );
 
   return readNullableString(rows[0]?.value);
 }
 
-async function hydrateCacheFromSqlite() {
+async function hydrateCacheFromSqlite(companyScope: string) {
   const [clients, payments, settings, logs, notifications, lastSync] = await Promise.all([
-    loadClientsFromSqlite(),
-    loadPaymentsFromSqlite(),
-    loadSettingsFromSqlite(),
-    loadLogsFromSqlite(),
-    loadNotificationsFromSqlite(),
-    loadLastSyncFromSqlite(),
+    loadClientsFromSqlite(companyScope),
+    loadPaymentsFromSqlite(companyScope),
+    loadSettingsFromSqlite(companyScope),
+    loadLogsFromSqlite(companyScope),
+    loadNotificationsFromSqlite(companyScope),
+    loadLastSyncFromSqlite(companyScope),
   ]);
+
+  if (cache.companyScope !== companyScope || getCurrentCompanyScope() !== companyScope) {
+    return;
+  }
 
   cache.clients = clients;
   cache.payments = payments;
@@ -574,24 +607,29 @@ async function hydrateCacheFromSqlite() {
   cache.initialized = true;
 }
 
-async function refreshClients() {
-  cache.clients = await loadClientsFromSqlite();
+async function refreshClients(companyScope: string) {
+  const clients = await loadClientsFromSqlite(companyScope);
+  if (cache.companyScope === companyScope) cache.clients = clients;
 }
 
-async function refreshPayments() {
-  cache.payments = await loadPaymentsFromSqlite();
+async function refreshPayments(companyScope: string) {
+  const payments = await loadPaymentsFromSqlite(companyScope);
+  if (cache.companyScope === companyScope) cache.payments = payments;
 }
 
-async function refreshSettings() {
-  cache.settings = await loadSettingsFromSqlite();
+async function refreshSettings(companyScope: string) {
+  const settings = await loadSettingsFromSqlite(companyScope);
+  if (cache.companyScope === companyScope) cache.settings = settings;
 }
 
-async function refreshLogs() {
-  cache.logs = await loadLogsFromSqlite();
+async function refreshLogs(companyScope: string) {
+  const logs = await loadLogsFromSqlite(companyScope);
+  if (cache.companyScope === companyScope) cache.logs = logs;
 }
 
-async function refreshNotifications() {
-  cache.notifications = await loadNotificationsFromSqlite();
+async function refreshNotifications(companyScope: string) {
+  const notifications = await loadNotificationsFromSqlite(companyScope);
+  if (cache.companyScope === companyScope) cache.notifications = notifications;
 }
 
 function visibleClients() {
@@ -653,33 +691,74 @@ function collectPendingSyncSnapshot(): PendingSyncSnapshot {
 }
 
 export async function initializeSqliteCache() {
-  if (cache.initialized) {
+  const companyScope = requireCurrentCompanyScope();
+
+  if (cache.companyScope !== companyScope) {
+    clearCacheForCompanyScope(companyScope);
+  }
+
+  if (cache.initialized && cache.companyScope === companyScope) {
     return;
   }
 
-  cache.initializePromise ??= (async () => {
-    await initializeSqliteDatabase();
-    await importLocalStorageSnapshotToSqlite();
-    await ensureDefaultAdminUser();
-    await hydrateCacheFromSqlite();
-    emitChange();
-  })().finally(() => {
-    cache.initializePromise = null;
-  });
+  if (cache.initializePromise && cache.initializeScope === companyScope) {
+    return cache.initializePromise;
+  }
 
-  return cache.initializePromise;
+  const initializePromise = (async () => {
+    await initializeSqliteDatabase();
+    await importLocalStorageSnapshotToSqlite(companyScope);
+    await ensureDefaultAdminUser();
+    await claimLegacyBusinessDataForCompany(companyScope);
+    await hydrateCacheFromSqlite(companyScope);
+    if (cache.companyScope === companyScope) {
+      emitChange();
+    }
+  })().finally(() => {
+    if (cache.initializePromise === initializePromise) {
+      cache.initializePromise = null;
+      cache.initializeScope = null;
+    }
+  });
+  cache.initializePromise = initializePromise;
+  cache.initializeScope = companyScope;
+
+  return initializePromise;
 }
 
 export async function reloadSqliteCache() {
-  cache.initialized = false;
-  cache.initializePromise = null;
+  const companyScope = requireCurrentCompanyScope();
+  clearCacheForCompanyScope(companyScope);
   resetSqliteInitialization();
   await initializeSqliteCache();
+}
+
+function clearCacheForCompanyScope(companyScope: string | null) {
+  cache.initialized = false;
+  cache.initializePromise = null;
+  cache.initializeScope = null;
+  cache.companyScope = companyScope;
+  cache.clients = [];
+  cache.payments = [];
+  cache.settings = emptySettings(companyScope);
+  cache.logs = [];
+  cache.notifications = [];
+  cache.lastSync = null;
 }
 
 function emitCacheChange() {
   emitChange();
 }
+
+subscribeCurrentUserSession(() => {
+  const companyScope = getCurrentCompanyScope();
+  clearCacheForCompanyScope(companyScope);
+  emitCacheChange();
+
+  if (companyScope) {
+    void initializeSqliteCache().catch(() => undefined);
+  }
+});
 
 function resetSettingsSyncStatus(settings: AdminSettings) {
   return settings.server_mode === "without-server" ? "local" : "synced";
@@ -832,7 +911,14 @@ function hasMigrationData(snapshot: LocalStorageMigrationSnapshot) {
   return Object.values(counts).some((count) => count > 0);
 }
 
-async function writeMigrationStatus(status: LocalStorageMigrationStatus) {
+async function writeMigrationStatus(
+  status: LocalStorageMigrationStatus,
+  companyScope: string,
+) {
+  const stateKey = getScopedAppStateKey(
+    LOCAL_STORAGE_MIGRATION_STATUS_KEY,
+    companyScope,
+  );
   const db = await getDb();
   await db.execute(
     `
@@ -842,11 +928,15 @@ async function writeMigrationStatus(status: LocalStorageMigrationStatus) {
         value = excluded.value,
         updated_at = CURRENT_TIMESTAMP
     `,
-    [LOCAL_STORAGE_MIGRATION_STATUS_KEY, JSON.stringify(status)],
+    [stateKey, JSON.stringify(status)],
   );
 }
 
-async function readMigrationStatus() {
+async function readMigrationStatus(companyScope: string) {
+  const stateKey = getScopedAppStateKey(
+    LOCAL_STORAGE_MIGRATION_STATUS_KEY,
+    companyScope,
+  );
   const db = await getDb();
   const rows = await db.query<AppStateRow>(
     `
@@ -855,7 +945,7 @@ async function readMigrationStatus() {
       WHERE key = ?
       LIMIT 1
     `,
-    [LOCAL_STORAGE_MIGRATION_STATUS_KEY],
+    [stateKey],
   );
   const serialized = readNullableString(rows[0]?.value);
 
@@ -870,7 +960,7 @@ async function readMigrationStatus() {
   }
 }
 
-async function upsertClients(clients: Client[]) {
+async function upsertClients(clients: Client[], companyScope: string) {
   const db = await getDb();
 
   for (const client of clients) {
@@ -878,6 +968,7 @@ async function upsertClients(clients: Client[]) {
       `
         INSERT INTO clients (
           id,
+          company_id,
           nom_complet,
           telephone,
           adresse,
@@ -893,7 +984,7 @@ async function upsertClients(clients: Client[]) {
           remote_updated_at,
           pending_sync,
           sync_status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           nom_complet = excluded.nom_complet,
           telephone = excluded.telephone,
@@ -910,9 +1001,11 @@ async function upsertClients(clients: Client[]) {
           remote_updated_at = excluded.remote_updated_at,
           pending_sync = excluded.pending_sync,
           sync_status = excluded.sync_status
+        WHERE clients.company_id = excluded.company_id
       `,
       [
         client.id,
+        companyScope,
         client.nom_complet,
         client.telephone,
         client.adresse,
@@ -933,7 +1026,7 @@ async function upsertClients(clients: Client[]) {
   }
 }
 
-async function upsertPayments(payments: Payment[]) {
+async function upsertPayments(payments: Payment[], companyScope: string) {
   const db = await getDb();
 
   for (const payment of payments) {
@@ -941,6 +1034,7 @@ async function upsertPayments(payments: Payment[]) {
       `
         INSERT INTO payments (
           id,
+          company_id,
           client_id,
           montant,
           date_paiement,
@@ -950,7 +1044,7 @@ async function upsertPayments(payments: Payment[]) {
           remote_updated_at,
           pending_sync,
           sync_status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           client_id = excluded.client_id,
           montant = excluded.montant,
@@ -961,9 +1055,11 @@ async function upsertPayments(payments: Payment[]) {
           remote_updated_at = excluded.remote_updated_at,
           pending_sync = excluded.pending_sync,
           sync_status = excluded.sync_status
+        WHERE payments.company_id = excluded.company_id
       `,
       [
         payment.id,
+        companyScope,
         payment.client_id,
         payment.montant,
         payment.date_paiement,
@@ -978,12 +1074,14 @@ async function upsertPayments(payments: Payment[]) {
   }
 }
 
-async function upsertSettings(settings: AdminSettings) {
+async function upsertSettings(settings: AdminSettings, companyScope: string) {
+  const settingsId = getCompanySettingsId(companyScope);
   const db = await getDb();
   await db.execute(
     `
       INSERT INTO admin_settings (
         id,
+        company_id,
         admin_email,
         admin_whatsapp,
         notification_retention_days,
@@ -1003,8 +1101,8 @@ async function upsertSettings(settings: AdminSettings) {
         remote_updated_at,
         pending_sync,
         sync_status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(company_id) DO UPDATE SET
         admin_email = excluded.admin_email,
         admin_whatsapp = excluded.admin_whatsapp,
         notification_retention_days = excluded.notification_retention_days,
@@ -1024,9 +1122,11 @@ async function upsertSettings(settings: AdminSettings) {
         remote_updated_at = excluded.remote_updated_at,
         pending_sync = excluded.pending_sync,
         sync_status = excluded.sync_status
+      WHERE admin_settings.company_id = excluded.company_id
     `,
     [
-      settings.id,
+      settingsId,
+      companyScope,
       settings.admin_email,
       settings.admin_whatsapp,
       settings.notification_retention_days,
@@ -1050,7 +1150,7 @@ async function upsertSettings(settings: AdminSettings) {
   );
 }
 
-async function upsertLogs(logs: ActivityLog[]) {
+async function upsertLogs(logs: ActivityLog[], companyScope: string) {
   const db = await getDb();
 
   for (const log of filterActivityLogsByRetention(logs)) {
@@ -1058,6 +1158,7 @@ async function upsertLogs(logs: ActivityLog[]) {
       `
         INSERT INTO activity_logs (
           id,
+          company_id,
           user_id,
           user_name,
           action_type,
@@ -1067,7 +1168,7 @@ async function upsertLogs(logs: ActivityLog[]) {
           created_at,
           pending_sync,
           sync_status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           user_id = excluded.user_id,
           user_name = excluded.user_name,
@@ -1078,9 +1179,11 @@ async function upsertLogs(logs: ActivityLog[]) {
           created_at = excluded.created_at,
           pending_sync = excluded.pending_sync,
           sync_status = excluded.sync_status
+        WHERE activity_logs.company_id = excluded.company_id
       `,
       [
         log.id,
+        companyScope,
         log.user_id,
         log.user_name,
         log.action_type,
@@ -1095,7 +1198,7 @@ async function upsertLogs(logs: ActivityLog[]) {
   }
 }
 
-async function upsertNotifications(notifications: NotificationItem[]) {
+async function upsertNotifications(notifications: NotificationItem[], companyScope: string) {
   const db = await getDb();
 
   for (const notification of notifications) {
@@ -1103,6 +1206,7 @@ async function upsertNotifications(notifications: NotificationItem[]) {
       `
         INSERT INTO notification_queue (
           id,
+          company_id,
           type,
           recipient,
           subject,
@@ -1114,7 +1218,7 @@ async function upsertNotifications(notifications: NotificationItem[]) {
           sent_at,
           pending_sync,
           sync_status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           type = excluded.type,
           recipient = excluded.recipient,
@@ -1127,9 +1231,11 @@ async function upsertNotifications(notifications: NotificationItem[]) {
           sent_at = excluded.sent_at,
           pending_sync = excluded.pending_sync,
           sync_status = excluded.sync_status
+        WHERE notification_queue.company_id = excluded.company_id
       `,
       [
         notification.id,
+        companyScope,
         notification.type,
         notification.recipient,
         notification.subject,
@@ -1146,28 +1252,30 @@ async function upsertNotifications(notifications: NotificationItem[]) {
   }
 }
 
-async function writeLastSync(lastSync: string | null) {
+async function writeLastSync(lastSync: string | null, companyScope: string) {
+  const stateKey = getScopedAppStateKey("last_sync", companyScope);
   const db = await getDb();
   await db.execute(
     `
       INSERT INTO app_state (key, value, updated_at)
-      VALUES ('last_sync', ?, CURRENT_TIMESTAMP)
+      VALUES (?, ?, CURRENT_TIMESTAMP)
       ON CONFLICT(key) DO UPDATE SET
         value = excluded.value,
         updated_at = CURRENT_TIMESTAMP
     `,
-    [lastSync],
+    [stateKey, lastSync],
   );
 }
 
 async function mergeRemoteAdminSettings(
   remoteSettings: SyncRemoteAdminSettings | null,
+  companyScope: string,
 ) {
   if (!remoteSettings) {
     return;
   }
 
-  const current = await loadSettingsFromSqlite();
+  const current = await loadSettingsFromSqlite(companyScope);
   const next: AdminSettings = {
     ...current,
     admin_email:
@@ -1194,10 +1302,10 @@ async function mergeRemoteAdminSettings(
     sync_status: "synced",
   };
 
-  await upsertSettings(next);
+  await upsertSettings(next, companyScope);
 }
 
-async function applyRemoteSyncData(result: SyncRemoteResult) {
+async function applyRemoteSyncData(result: SyncRemoteResult, companyScope: string) {
   await upsertClients(
     result.clients.map((client) => ({
       ...client,
@@ -1207,6 +1315,7 @@ async function applyRemoteSyncData(result: SyncRemoteResult) {
       pending_sync: false,
       sync_status: "synced" as const,
     })),
+    companyScope,
   );
   await upsertPayments(
     result.payments.map((payment) => ({
@@ -1214,14 +1323,16 @@ async function applyRemoteSyncData(result: SyncRemoteResult) {
       pending_sync: false,
       sync_status: "synced" as const,
     })),
+    companyScope,
   );
-  await mergeRemoteAdminSettings(result.adminSettings);
+  await mergeRemoteAdminSettings(result.adminSettings, companyScope);
   await upsertLogs(
     result.activityLogs.map((log) => ({
       ...log,
       pending_sync: false,
       sync_status: "synced" as const,
     })),
+    companyScope,
   );
   await upsertNotifications(
     result.notifications.map((notification) => ({
@@ -1229,6 +1340,7 @@ async function applyRemoteSyncData(result: SyncRemoteResult) {
       pending_sync: false,
       sync_status: "synced" as const,
     })),
+    companyScope,
   );
 }
 
@@ -1247,6 +1359,7 @@ async function markEntitySyncResults(
   table: "clients" | "payments" | "activity_logs" | "notification_queue",
   ids: string[],
   failedIds: Set<string>,
+  companyScope: string,
 ) {
   const db = await getDb();
 
@@ -1259,8 +1372,9 @@ async function markEntitySyncResults(
           pending_sync = ?,
           sync_status = ?
         WHERE id = ?
+          AND company_id = ?
       `,
-      [failed ? 1 : 0, failed ? "failed" : "synced", id],
+      [failed ? 1 : 0, failed ? "failed" : "synced", id, companyScope],
     );
   }
 }
@@ -1268,16 +1382,19 @@ async function markEntitySyncResults(
 async function markPushedSyncResults(
   snapshot: PendingSyncSnapshot,
   failedItems: SyncRemoteFailedItem[],
+  companyScope: string,
 ) {
   await markEntitySyncResults(
     "clients",
     snapshot.clients.map((client) => client.id),
     getFailedIds(failedItems, "client"),
+    companyScope,
   );
   await markEntitySyncResults(
     "payments",
     snapshot.payments.map((payment) => payment.id),
     getFailedIds(failedItems, "payment"),
+    companyScope,
   );
 
   if (snapshot.adminSettings) {
@@ -1290,11 +1407,13 @@ async function markPushedSyncResults(
           pending_sync = ?,
           sync_status = ?
         WHERE id = ?
+          AND company_id = ?
       `,
       [
         settingsFailed ? 1 : 0,
         settingsFailed ? "failed" : "synced",
         snapshot.adminSettings.id,
+        companyScope,
       ],
     );
   }
@@ -1303,11 +1422,13 @@ async function markPushedSyncResults(
     "activity_logs",
     snapshot.activityLogs.map((log) => log.id),
     getFailedIds(failedItems, "activityLog"),
+    companyScope,
   );
   await markEntitySyncResults(
     "notification_queue",
     snapshot.notifications.map((notification) => notification.id),
     getFailedIds(failedItems, "notification"),
+    companyScope,
   );
 }
 
@@ -1469,14 +1590,93 @@ async function writeAppStateValue(key: string, value: string | null) {
   );
 }
 
+interface CompanyScopeRow extends SqliteRow {
+  company_id: unknown;
+}
+
+async function canClaimLegacyBusinessData(companyScope: string) {
+  const authenticatedCompanyId = getCurrentUserSession()?.company_id?.trim();
+  if (!authenticatedCompanyId || authenticatedCompanyId !== companyScope) {
+    return false;
+  }
+
+  const db = await getDb();
+  const rows = await db.query<CompanyScopeRow>(
+    `
+      SELECT DISTINCT TRIM(company_id) AS company_id
+      FROM local_users
+      WHERE company_id IS NOT NULL
+        AND TRIM(company_id) <> ''
+    `,
+  );
+  const companyIds = rows
+    .map((row) => readString(row.company_id).trim())
+    .filter(Boolean);
+
+  return companyIds.length === 1 && companyIds[0] === companyScope;
+}
+
+async function claimLegacyBusinessDataForCompany(companyScope: string) {
+  if (!(await canClaimLegacyBusinessData(companyScope))) {
+    return;
+  }
+
+  const db = await getDb();
+  const settingsId = getCompanySettingsId(companyScope);
+  const lastSyncKey = getScopedAppStateKey("last_sync", companyScope);
+  const smtpPasswordKey = getScopedAppStateKey("smtp_password", companyScope);
+
+  await db.execute("UPDATE clients SET company_id = ? WHERE company_id IS NULL", [companyScope]);
+  await db.execute("UPDATE payments SET company_id = ? WHERE company_id IS NULL", [companyScope]);
+  await db.execute(
+    `
+      UPDATE admin_settings
+      SET id = ?, company_id = ?
+      WHERE company_id IS NULL
+        AND (SELECT COUNT(*) FROM admin_settings WHERE company_id IS NULL) = 1
+        AND NOT EXISTS (
+          SELECT 1
+          FROM admin_settings
+          WHERE company_id = ? OR id = ?
+        )
+    `,
+    [settingsId, companyScope, companyScope, settingsId],
+  );
+  await db.execute("UPDATE activity_logs SET company_id = ? WHERE company_id IS NULL", [companyScope]);
+  await db.execute("UPDATE notification_queue SET company_id = ? WHERE company_id IS NULL", [companyScope]);
+
+  await db.execute(
+    `
+      INSERT INTO app_state (key, value, updated_at)
+      SELECT ?, value, CURRENT_TIMESTAMP
+      FROM app_state
+      WHERE key = 'last_sync'
+        AND NOT EXISTS (SELECT 1 FROM app_state WHERE key = ?)
+      LIMIT 1
+    `,
+    [lastSyncKey, lastSyncKey],
+  );
+  await db.execute(
+    `
+      INSERT INTO app_state (key, value, updated_at)
+      SELECT ?, value, CURRENT_TIMESTAMP
+      FROM app_state
+      WHERE key = 'smtp_password'
+        AND NOT EXISTS (SELECT 1 FROM app_state WHERE key = ?)
+      LIMIT 1
+    `,
+    [smtpPasswordKey, smtpPasswordKey],
+  );
+}
+
 function errorMessage(error: unknown) {
   return error instanceof Error && error.message.trim().length > 0
     ? error.message
     : "Erreur inconnue";
 }
 
-async function importLocalStorageSnapshotToSqlite() {
-  const existingStatus = await readMigrationStatus();
+async function importLocalStorageSnapshotToSqlite(companyScope: string) {
+  const existingStatus = await readMigrationStatus(companyScope);
 
   if (existingStatus?.status === "success") {
     return;
@@ -1490,7 +1690,7 @@ async function importLocalStorageSnapshotToSqlite() {
       migratedAt: new Date().toISOString(),
       backupPath: null,
       counts: getMigrationCounts(snapshot),
-    });
+    }, companyScope);
     return;
   }
 
@@ -1499,22 +1699,29 @@ async function importLocalStorageSnapshotToSqlite() {
 
   try {
     backup = await backupDatabase();
-    await upsertClients(snapshot.clients);
-    await upsertPayments(snapshot.payments);
-
-    if (snapshot.settings) {
-      await upsertSettings(snapshot.settings);
-    }
-
-    await upsertLogs(snapshot.logs);
-    await upsertNotifications(snapshot.notifications);
     await upsertLocalUsers(snapshot.localUsers);
-    if (snapshot.smtpPassword) {
-      await writeAppStateValue("smtp_password", snapshot.smtpPassword);
-    }
+    const canClaimBusinessData = await canClaimLegacyBusinessData(companyScope);
 
-    if (snapshot.lastSync) {
-      await writeLastSync(snapshot.lastSync);
+    if (canClaimBusinessData) {
+      await upsertClients(snapshot.clients, companyScope);
+      await upsertPayments(snapshot.payments, companyScope);
+
+      if (snapshot.settings) {
+        await upsertSettings(snapshot.settings, companyScope);
+      }
+
+      await upsertLogs(snapshot.logs, companyScope);
+      await upsertNotifications(snapshot.notifications, companyScope);
+      if (snapshot.smtpPassword) {
+        await writeAppStateValue(
+          getScopedAppStateKey("smtp_password", companyScope),
+          snapshot.smtpPassword,
+        );
+      }
+
+      if (snapshot.lastSync) {
+        await writeLastSync(snapshot.lastSync, companyScope);
+      }
     }
 
     await writeMigrationStatus({
@@ -1522,7 +1729,7 @@ async function importLocalStorageSnapshotToSqlite() {
       migratedAt: new Date().toISOString(),
       backupPath: backup.path,
       counts,
-    });
+    }, companyScope);
   } catch (error) {
     await writeMigrationStatus({
       status: "failed",
@@ -1530,7 +1737,7 @@ async function importLocalStorageSnapshotToSqlite() {
       backupPath: backup?.path ?? null,
       counts,
       error: errorMessage(error),
-    });
+    }, companyScope);
     throw error;
   }
 }
@@ -1538,37 +1745,56 @@ async function importLocalStorageSnapshotToSqlite() {
 export async function resetSqliteDevelopmentData() {
   await initializeSqliteCache();
 
+  const companyScope = requireCurrentCompanyScope();
+  const lastSyncKey = getScopedAppStateKey("last_sync", companyScope);
   const db = await getDb();
   const settings = normalizeAdminSettings(cache.settings);
 
-  await db.execute("DELETE FROM notification_queue");
-  await db.execute("DELETE FROM activity_logs");
-  await db.execute("DELETE FROM payments");
-  await db.execute("DELETE FROM clients");
-  await db.execute("DELETE FROM local_users WHERE role = 'employe'");
-  await db.execute("DELETE FROM app_state WHERE key = 'last_sync'");
+  await db.execute("DELETE FROM notification_queue WHERE company_id = ?", [companyScope]);
+  await db.execute("DELETE FROM activity_logs WHERE company_id = ?", [companyScope]);
+  await db.execute("DELETE FROM payments WHERE company_id = ?", [companyScope]);
+  await db.execute("DELETE FROM clients WHERE company_id = ?", [companyScope]);
+  await db.execute(
+    "DELETE FROM local_users WHERE role = 'employe' AND company_id = ?",
+    [companyScope],
+  );
+  await db.execute("DELETE FROM app_state WHERE key = ?", [lastSyncKey]);
   await db.execute(
     `
       UPDATE admin_settings
       SET pending_sync = 0,
           sync_status = ?
-      WHERE id = 'settings_default'
+      WHERE company_id = ?
     `,
-    [resetSettingsSyncStatus(settings)],
+    [resetSettingsSyncStatus(settings), companyScope],
   );
 
-  await hydrateCacheFromSqlite();
+  await hydrateCacheFromSqlite(companyScope);
   emitCacheChange();
 }
 
-async function getTableCount(tableName: string) {
+const COMPANY_SCOPED_TABLES = new Set([
+  "clients",
+  "payments",
+  "admin_settings",
+  "activity_logs",
+  "notification_queue",
+]);
+
+async function getTableCount(tableName: string, companyScope: string) {
   const db = await getDb();
-  const rows = await db.query<TableCountRow>(`SELECT COUNT(*) AS count FROM ${tableName}`);
+  const rows = COMPANY_SCOPED_TABLES.has(tableName)
+    ? await db.query<TableCountRow>(
+        `SELECT COUNT(*) AS count FROM ${tableName} WHERE company_id = ?`,
+        [companyScope],
+      )
+    : await db.query<TableCountRow>(`SELECT COUNT(*) AS count FROM ${tableName}`);
   return readNumber(rows[0]?.count, 0);
 }
 
 export async function getSqliteStorageDiagnostics(): Promise<StorageDiagnostics> {
   await initializeSqliteCache();
+  const companyScope = requireCurrentCompanyScope();
 
   const tableNames = [
     "clients",
@@ -1579,7 +1805,9 @@ export async function getSqliteStorageDiagnostics(): Promise<StorageDiagnostics>
     "local_users",
     "app_state",
   ];
-  const counts = await Promise.all(tableNames.map((tableName) => getTableCount(tableName)));
+  const counts = await Promise.all(
+    tableNames.map((tableName) => getTableCount(tableName, companyScope)),
+  );
   const tableCounts = Object.fromEntries(
     tableNames.map((tableName, index) => [tableName, counts[index]]),
   );
@@ -1590,7 +1818,7 @@ export async function getSqliteStorageDiagnostics(): Promise<StorageDiagnostics>
     tableCounts,
     localStorageBusinessDataDetected: localStorageBusinessDataKeys.length > 0,
     localStorageBusinessDataKeys,
-    migrationStatus: await readMigrationStatus(),
+    migrationStatus: await readMigrationStatus(companyScope),
   };
 }
 
