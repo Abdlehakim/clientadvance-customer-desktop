@@ -306,7 +306,6 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
     initialSessionCache.setupCompletedInSession,
   );
   const isNavigatingToLoginRef = useRef(false);
-  const previousOnlineRef = useRef<boolean | null>(null);
   const autoSyncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const desktopDeliveryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastDesktopDeliverySignatureRef = useRef<string | null>(null);
@@ -654,20 +653,14 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   };
 
   useEffect(() => {
-    if (!shouldRenderProtectedApp) {
+    if (
+      !shouldRenderProtectedApp ||
+      !user ||
+      !online ||
+      !backendSyncEnabled ||
+      pending <= 0
+    ) {
       clearAutoSyncTimeout();
-      return;
-    }
-
-    const previousOnline = previousOnlineRef.current;
-    previousOnlineRef.current = online;
-
-    if (!user || !online) {
-      clearAutoSyncTimeout();
-      return;
-    }
-
-    if (!backendSyncEnabled || previousOnline === null || previousOnline || pending <= 0) {
       return;
     }
 
@@ -681,6 +674,10 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
 
       void runSync("auto");
     }, 2000);
+
+    return () => {
+      clearAutoSyncTimeout();
+    };
   }, [backendSyncEnabled, online, pending, shouldRenderProtectedApp, user]);
 
   useEffect(() => {

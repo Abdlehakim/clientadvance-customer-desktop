@@ -1854,21 +1854,24 @@ export const sqliteCachedClientService: ClientRepository = {
   },
   async create(input) {
     await initializeSqliteCache();
+    const companyScope = requireCurrentCompanyScope();
     const client = await clientSQLiteRepository.create(input as ClientCreateInput);
-    await Promise.all([refreshClients(), refreshLogs()]);
+    await Promise.all([refreshClients(companyScope), refreshLogs(companyScope)]);
     emitCacheChange();
     return client as Client;
   },
   async update(id, patch) {
     await initializeSqliteCache();
+    const companyScope = requireCurrentCompanyScope();
     await clientSQLiteRepository.update(id, patch as ClientUpdateInput);
-    await Promise.all([refreshClients(), refreshLogs()]);
+    await Promise.all([refreshClients(companyScope), refreshLogs(companyScope)]);
     emitCacheChange();
   },
   async delete(id) {
     await initializeSqliteCache();
+    const companyScope = requireCurrentCompanyScope();
     await clientSQLiteRepository.delete(id);
-    await Promise.all([refreshClients(), refreshLogs()]);
+    await Promise.all([refreshClients(companyScope), refreshLogs(companyScope)]);
     emitCacheChange();
   },
 };
@@ -1882,15 +1885,25 @@ export const sqliteCachedPaymentService: PaymentRepository = {
   },
   async create(input) {
     await initializeSqliteCache();
+    const companyScope = requireCurrentCompanyScope();
     const payment = await paymentSQLiteRepository.create(input as PaymentCreateInput);
-    await Promise.all([refreshPayments(), refreshLogs(), refreshNotifications()]);
+    await Promise.all([
+      refreshPayments(companyScope),
+      refreshLogs(companyScope),
+      refreshNotifications(companyScope),
+    ]);
     emitCacheChange();
     return payment as Payment;
   },
   async delete(id) {
     await initializeSqliteCache();
+    const companyScope = requireCurrentCompanyScope();
     await paymentSQLiteRepository.delete(id);
-    await Promise.all([refreshPayments(), refreshLogs(), refreshNotifications()]);
+    await Promise.all([
+      refreshPayments(companyScope),
+      refreshLogs(companyScope),
+      refreshNotifications(companyScope),
+    ]);
     emitCacheChange();
   },
 };
@@ -1901,8 +1914,9 @@ export const sqliteCachedAdminSettingsService: AdminSettingsRepository = {
   },
   async update(patch) {
     await initializeSqliteCache();
+    const companyScope = requireCurrentCompanyScope();
     await adminSettingsSQLiteRepository.update(patch as AdminSettingsUpdateInput);
-    await Promise.all([refreshSettings(), refreshLogs()]);
+    await Promise.all([refreshSettings(companyScope), refreshLogs(companyScope)]);
     emitCacheChange();
   },
 };
@@ -1913,8 +1927,9 @@ export const sqliteCachedActivityLogService: ActivityLogRepository = {
   },
   async create(input) {
     await initializeSqliteCache();
+    const companyScope = requireCurrentCompanyScope();
     const log = await activityLogSQLiteRepository.create(input as ActivityLogCreateInput);
-    await refreshLogs();
+    await refreshLogs(companyScope);
     emitCacheChange();
     return log as ActivityLog;
   },
@@ -1926,35 +1941,40 @@ export const sqliteCachedNotificationService: NotificationRepository = {
   },
   async create(input) {
     await initializeSqliteCache();
+    const companyScope = requireCurrentCompanyScope();
     const notification = await notificationSQLiteRepository.create(input as NotificationCreateInput);
-    await refreshNotifications();
+    await refreshNotifications(companyScope);
     emitCacheChange();
     return notification as NotificationItem;
   },
   async markAsSending(id) {
     await initializeSqliteCache();
+    const companyScope = requireCurrentCompanyScope();
     await notificationSQLiteRepository.markAsSending(id);
-    await refreshNotifications();
+    await refreshNotifications(companyScope);
     emitCacheChange();
   },
   async markAsSent(id) {
     await initializeSqliteCache();
+    const companyScope = requireCurrentCompanyScope();
     await notificationSQLiteRepository.markAsSent(id);
-    await refreshNotifications();
+    await refreshNotifications(companyScope);
     emitCacheChange();
   },
   async markAsFailed(id, errorMessage) {
     await initializeSqliteCache();
+    const companyScope = requireCurrentCompanyScope();
     await notificationSQLiteRepository.markAsFailed(id, errorMessage);
-    await refreshNotifications();
+    await refreshNotifications(companyScope);
     emitCacheChange();
   },
   async clearSent(options) {
     await initializeSqliteCache();
+    const companyScope = requireCurrentCompanyScope();
     const deletedCount = await notificationSQLiteRepository.clearSent(options);
 
     if (deletedCount > 0) {
-      await refreshNotifications();
+      await refreshNotifications(companyScope);
       emitCacheChange();
     }
 
@@ -1978,6 +1998,7 @@ export function createSqliteCachedSyncService(syncDelegate: SqliteSyncDelegate):
     },
     async syncPendingData(): Promise<SyncResult> {
       await initializeSqliteCache();
+      const companyScope = requireCurrentCompanyScope();
 
       if (!syncDelegate.isOnlineMode()) {
         return { ok: false, synced: 0 };
@@ -1989,10 +2010,14 @@ export function createSqliteCachedSyncService(syncDelegate: SqliteSyncDelegate):
         ...(cache.lastSync ? { since: cache.lastSync } : {}),
       });
 
-      await applyRemoteSyncData(result);
-      await markPushedSyncResults(snapshot, result.failedItems);
-      await writeLastSync(result.serverTimestamp);
-      await hydrateCacheFromSqlite();
+      if (getCurrentCompanyScope() !== companyScope) {
+        throw new Error("Le contexte de société a changé pendant la synchronisation.");
+      }
+
+      await applyRemoteSyncData(result, companyScope);
+      await markPushedSyncResults(snapshot, result.failedItems, companyScope);
+      await writeLastSync(result.serverTimestamp, companyScope);
+      await hydrateCacheFromSqlite(companyScope);
       emitCacheChange();
 
       return {
