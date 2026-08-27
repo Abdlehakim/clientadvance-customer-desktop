@@ -37,6 +37,8 @@ const DATABASE_TEMP_FILE_NAME: &str = "gestion-facile.db.tmp";
 const DATABASE_DEFAULT_FOLDER_NAME: &str = "Gestion Facile";
 const TRIAL_SIGNUP_URL: &str =
   "https://clientadvance.smartwebify.com/signup";
+const GOOGLE_APP_PASSWORDS_URL: &str =
+  "https://myaccount.google.com/apppasswords";
 #[cfg(debug_assertions)]
 const DEVTOOLS_F12_HOTKEY_SCRIPT: &str = r#"
 ;(function () {
@@ -1682,6 +1684,14 @@ fn open_trial_signup_page(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn open_google_app_passwords_page(app: AppHandle) -> Result<(), String> {
+  app
+    .opener()
+    .open_url(GOOGLE_APP_PASSWORDS_URL, None::<&str>)
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn get_desktop_version(app: AppHandle) -> String {
   app.package_info().version.to_string()
 }
@@ -1823,6 +1833,7 @@ pub fn run() {
       change_database_location,
       send_smtp_email,
       open_trial_signup_page,
+      open_google_app_passwords_page,
       get_desktop_version,
       check_desktop_update,
       install_desktop_update,

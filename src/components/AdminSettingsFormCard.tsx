@@ -26,6 +26,7 @@ import {
   WHATSAPP_BACKEND_REQUIRED_MESSAGE,
   getNotificationDeliveryModeForServerMode,
 } from "@/infrastructure/local/adminSettingsState";
+import { invokeTauriCommand } from "@/infrastructure/local/sqlite/sqliteClient";
 import { getStoredSmtpPassword } from "@/infrastructure/local/smtpPasswordStorage";
 import { testAdminSmtpEmail, updateAdminSettings } from "@/lib/data";
 import {
@@ -188,6 +189,18 @@ export function AdminSettingsFormCard({
 
     if (isGmailProvider) {
       setSmtpFromEmail(value.trim());
+    }
+  };
+
+  const openGoogleAppPasswords = async () => {
+    try {
+      await invokeTauriCommand<void>("open_google_app_passwords_page");
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Impossible d’ouvrir la page des mots de passe d’application Google.",
+      );
     }
   };
 
@@ -457,9 +470,42 @@ export function AdminSettingsFormCard({
             </div>
 
             {isGmailProvider ? (
-              <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-950">
-                Pour Gmail, utilisez un mot de passe d'application, pas le mot de passe
-                normal du compte Gmail.
+              <div className="space-y-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-950">
+                <p>
+                  Pour Gmail, utilisez un mot de passe d'application, pas le mot de
+                  passe normal du compte Gmail.
+                </p>
+
+                <div className="space-y-1">
+                  <p className="font-medium">
+                    Pour créer votre mot de passe d'application :
+                  </p>
+                  <ol className="list-decimal space-y-1 pl-5">
+                    <li>Connectez-vous à votre compte Google.</li>
+                    <li>
+                      Activez la validation en deux étapes si ce n'est pas déjà fait.
+                    </li>
+                    <li>Ouvrez la page « Mots de passe des applications ».</li>
+                    <li>Créez un mot de passe d'application pour ClientAdvance.</li>
+                    <li>
+                      Copiez le mot de passe généré dans le champ « Mot de passe SMTP ».
+                    </li>
+                  </ol>
+                </div>
+
+                <div className="space-y-2">
+                  <p className="break-all text-xs">
+                    https://myaccount.google.com/apppasswords
+                  </p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void openGoogleAppPasswords()}
+                  >
+                    Ouvrir la page Google
+                  </Button>
+                </div>
               </div>
             ) : null}
 
