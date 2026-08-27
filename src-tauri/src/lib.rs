@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS clients (
   updated_by TEXT NOT NULL DEFAULT '',
   deleted_at TEXT,
   remote_updated_at TEXT,
+  server_version INTEGER NOT NULL DEFAULT 0,
   pending_sync INTEGER NOT NULL DEFAULT 1,
   sync_status TEXT NOT NULL DEFAULT 'pending'
 );
@@ -87,6 +88,8 @@ CREATE TABLE IF NOT EXISTS payments (
   created_by TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   remote_updated_at TEXT,
+  server_version INTEGER NOT NULL DEFAULT 0,
+  deleted_at TEXT,
   pending_sync INTEGER NOT NULL DEFAULT 1,
   sync_status TEXT NOT NULL DEFAULT 'pending'
 );
@@ -111,6 +114,7 @@ CREATE TABLE IF NOT EXISTS admin_settings (
   updated_at TEXT NOT NULL,
   updated_by TEXT NOT NULL DEFAULT '',
   remote_updated_at TEXT,
+  server_version INTEGER NOT NULL DEFAULT 0,
   pending_sync INTEGER NOT NULL DEFAULT 0,
   sync_status TEXT NOT NULL DEFAULT 'synced'
 );
@@ -175,6 +179,35 @@ CREATE TABLE IF NOT EXISTS app_state (
   key TEXT PRIMARY KEY,
   value TEXT,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS sync_outbox (
+  operation_id TEXT PRIMARY KEY,
+  company_id TEXT NOT NULL,
+  entity_type TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  action TEXT NOT NULL,
+  base_version INTEGER NOT NULL DEFAULT 0,
+  payload_json TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sync_conflicts (
+  id TEXT PRIMARY KEY,
+  company_id TEXT NOT NULL,
+  operation_id TEXT NOT NULL,
+  entity_type TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  local_payload_json TEXT NOT NULL,
+  server_payload_json TEXT,
+  base_version INTEGER NOT NULL,
+  server_version INTEGER,
+  message TEXT,
+  created_at TEXT NOT NULL
 );
 
 INSERT OR IGNORE INTO app_state (key, value, updated_at)
@@ -866,6 +899,25 @@ fn ensure_schema_upgrades(connection: &Connection) -> Result<(), String> {
   add_column_if_missing(
     connection,
     "clients",
+    "server_version",
+    "INTEGER NOT NULL DEFAULT 0",
+  )?;
+  add_column_if_missing(
+    connection,
+    "payments",
+    "server_version",
+    "INTEGER NOT NULL DEFAULT 0",
+  )?;
+  add_column_if_missing(connection, "payments", "deleted_at", "TEXT")?;
+  add_column_if_missing(
+    connection,
+    "admin_settings",
+    "server_version",
+    "INTEGER NOT NULL DEFAULT 0",
+  )?;
+  add_column_if_missing(
+    connection,
+    "clients",
     "cin_issued_at",
     "TEXT NOT NULL DEFAULT ''",
   )?;
@@ -1118,6 +1170,16 @@ fn ensure_schema_upgrades(connection: &Connection) -> Result<(), String> {
           ON activity_logs(company_id, created_at);
         CREATE INDEX IF NOT EXISTS idx_notification_queue_company_status_created_at
           ON notification_queue(company_id, status, created_at);
+        CREATE INDEX IF NOT EXISTS idx_sync_outbox_company_id
+          ON sync_outbox(company_id);
+        CREATE INDEX IF NOT EXISTS idx_sync_outbox_company_status
+          ON sync_outbox(company_id, status);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_outbox_company_entity
+          ON sync_outbox(company_id, entity_type, entity_id);
+        CREATE INDEX IF NOT EXISTS idx_sync_conflicts_company_entity
+          ON sync_conflicts(company_id, entity_type, entity_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_conflicts_company_entity_unique
+          ON sync_conflicts(company_id, entity_type, entity_id);
       ",
     )
     .map_err(|error| error.to_string())?;
@@ -1252,6 +1314,48 @@ fn sqlite_execute(
     rows_affected,
     last_insert_rowid: connection.last_insert_rowid(),
   })
+}
+
+#[tauri::command]
+fn sqlite_transaction(
+  app: AppHandle,
+  state: State<'_, DatabaseAccessState>,
+  statements: Vec<SqliteStatement>,
+) -> Result<Vec<SqliteExecuteResult>, String> {
+  let _guard = state
+    .sqlite_lock
+    .lock()
+    .map_err(|_| "Database access lock poisoned.".to_string())?;
+  let (mut connection, _path) = open_database(&app)?;
+  let transaction = connection.transaction().map_err(|error| error.to_string())?;
+  let mut results = Vec::with_capacity(statements.len());
+
+  for statement in statements {
+    let params = statement
+      .params
+      .into_iter()
+      .map(json_to_sql_value)
+      .collect::<Result<Vec<_>, _>>()?;
+    let rows_affected = match transaction.execute(
+      &statement.sql,
+      params_from_iter(params.iter()),
+    ) {
+      Ok(rows_affected) => rows_affected,
+      Err(error) => {
+        let message = error.to_string();
+        let _ = transaction.rollback();
+        return Err(message);
+      }
+    };
+
+    results.push(SqliteExecuteResult {
+      rows_affected,
+      last_insert_rowid: transaction.last_insert_rowid(),
+    });
+  }
+
+  transaction.commit().map_err(|error| error.to_string())?;
+  Ok(results)
 }
 
 #[tauri::command]
@@ -1709,6 +1813,7 @@ pub fn run() {
     .invoke_handler(tauri::generate_handler![
       sqlite_init,
       sqlite_execute,
+      sqlite_transaction,
       sqlite_query,
       get_database_location,
       backup_database,

@@ -1,6 +1,8 @@
 export interface SyncResult {
   ok: boolean;
   synced: number;
+  conflicts?: number;
+  changed?: number;
 }
 
 export interface SyncRepository {

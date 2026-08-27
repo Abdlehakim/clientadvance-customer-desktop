@@ -5,6 +5,7 @@ export type NotificationDeliveryMode = "backend" | "desktop-email";
 export type SmtpProviderType = "custom" | "gmail" | "professional";
 
 export interface AdminSettings extends Syncable {
+  server_version: number;
   id: string;
   admin_email: string;
   admin_whatsapp: string;

@@ -146,6 +146,7 @@ export function createAdminSettingsFallback(): AdminSettings {
 
   return {
     id: "settings_default",
+    server_version: 0,
     admin_email: "",
     admin_whatsapp: "",
     notification_retention_days: DEFAULT_NOTIFICATION_RETENTION_DAYS,
@@ -184,6 +185,7 @@ export function normalizeAdminSettings(
     ...fallback,
     ...value,
     id: readString(value?.id, fallback.id),
+    server_version: Math.max(0, Math.trunc(readNumber(value?.server_version, 0))),
     admin_email: readString(value?.admin_email, fallback.admin_email),
     admin_whatsapp: readString(value?.admin_whatsapp, fallback.admin_whatsapp),
     notification_retention_days: Math.max(

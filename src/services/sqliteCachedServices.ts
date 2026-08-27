@@ -10,6 +10,9 @@ import type {
   NotificationItem,
   Payment,
   PaymentCreateInput,
+  SyncChange,
+  SyncOperationResult,
+  SyncOutboxOperation,
 } from "@/domain/types";
 import { ensureDefaultAdminUser } from "@/infrastructure/auth/seedDefaultAdmin";
 import {
@@ -36,13 +39,28 @@ import {
   cleanupOldActivityLogs as cleanupSqliteActivityLogs,
 } from "@/infrastructure/local/sqlite/activityLogSQLiteRepository";
 import { adminSettingsSQLiteRepository } from "@/infrastructure/local/sqlite/adminSettingsSQLiteRepository";
-import { clientSQLiteRepository } from "@/infrastructure/local/sqlite/clientSQLiteRepository";
+import {
+  clientSQLiteRepository,
+  toClientOperationPayload,
+} from "@/infrastructure/local/sqlite/clientSQLiteRepository";
 import {
   createAdminSettingsFallback,
   normalizeAdminSettings,
 } from "@/infrastructure/local/adminSettingsState";
 import { notificationSQLiteRepository } from "@/infrastructure/local/sqlite/notificationSQLiteRepository";
-import { paymentSQLiteRepository } from "@/infrastructure/local/sqlite/paymentSQLiteRepository";
+import {
+  paymentSQLiteRepository,
+  toPaymentOperationPayload,
+} from "@/infrastructure/local/sqlite/paymentSQLiteRepository";
+import {
+  buildConflictUpsertStatement,
+  syncConflictSQLiteRepository,
+} from "@/infrastructure/local/sqlite/syncConflictSQLiteRepository";
+import {
+  buildOutboxRemoveStatement,
+  buildOutboxUpsertStatement,
+  syncOutboxSQLiteRepository,
+} from "@/infrastructure/local/sqlite/syncOutboxSQLiteRepository";
 import {
   backupDatabase,
   getDb,
@@ -50,6 +68,7 @@ import {
   resetSqliteInitialization,
   type SqliteDatabaseBackupInfo,
   type SqliteRow,
+  type SqliteStatement,
 } from "@/infrastructure/local/sqlite/sqliteClient";
 import {
   emitChange,
@@ -58,7 +77,10 @@ import {
 } from "@/infrastructure/local/localStorageDatabase";
 import type {
   SyncRemoteAdminSettings,
+  SyncBootstrapResult,
+  SyncChangesResult,
   SyncRemoteFailedItem,
+  SyncOperationsResult,
   SyncRemoteRequest,
   SyncRemoteResult,
 } from "@/infrastructure/remote/syncRemoteService";
@@ -101,6 +123,9 @@ const LOCAL_STORAGE_MIGRATION_STATUS_KEY = "local_storage_migration_status";
 
 interface SqliteSyncDelegate {
   fullSync(payload: SyncRemoteRequest): Promise<SyncRemoteResult>;
+  bootstrap(): Promise<SyncBootstrapResult>;
+  pushOperations(operations: SyncOutboxOperation[]): Promise<SyncOperationsResult>;
+  pullChanges(after?: string, limit?: number): Promise<SyncChangesResult>;
   setOnlineMode(value: boolean): void;
   isOnlineMode(): boolean;
 }
@@ -139,6 +164,7 @@ interface ClientRow extends SqliteRow {
   updated_by: unknown;
   deleted_at: unknown;
   remote_updated_at: unknown;
+  server_version: unknown;
   pending_sync: unknown;
   sync_status: unknown;
 }
@@ -152,6 +178,8 @@ interface PaymentRow extends SqliteRow {
   created_by: unknown;
   created_at: unknown;
   remote_updated_at: unknown;
+  server_version: unknown;
+  deleted_at: unknown;
   pending_sync: unknown;
   sync_status: unknown;
 }
@@ -175,6 +203,7 @@ interface AdminSettingsRow extends SqliteRow {
   updated_at: unknown;
   updated_by: unknown;
   remote_updated_at: unknown;
+  server_version: unknown;
   pending_sync: unknown;
   sync_status: unknown;
 }
@@ -325,6 +354,7 @@ function readSyncStatus<T extends string>(value: unknown, fallback: T): T {
 function toClient(row: ClientRow): Client {
   return {
     id: readString(row.id),
+    server_version: Math.max(0, Math.trunc(readNumber(row.server_version))),
     nom_complet: readString(row.nom_complet),
     telephone: readString(row.telephone),
     adresse: readString(row.adresse),
@@ -346,6 +376,7 @@ function toClient(row: ClientRow): Client {
 function toPayment(row: PaymentRow): Payment {
   return {
     id: readString(row.id),
+    server_version: Math.max(0, Math.trunc(readNumber(row.server_version))),
     client_id: readString(row.client_id),
     montant: readNumber(row.montant),
     date_paiement: readString(row.date_paiement),
@@ -353,6 +384,7 @@ function toPayment(row: PaymentRow): Payment {
     created_by: readString(row.created_by),
     created_at: readString(row.created_at),
     remote_updated_at: readNullableString(row.remote_updated_at) ?? undefined,
+    deleted_at: readNullableString(row.deleted_at),
     pending_sync: readBoolean(row.pending_sync),
     sync_status: readSyncStatus(row.sync_status, "pending"),
   };
@@ -361,6 +393,7 @@ function toPayment(row: PaymentRow): Payment {
 function toAdminSettings(row: AdminSettingsRow, settingsId: string): AdminSettings {
   return normalizeAdminSettings({
     id: readString(row.id, settingsId),
+    server_version: Math.max(0, Math.trunc(readNumber(row.server_version))),
     admin_email: readString(row.admin_email),
     admin_whatsapp: readString(row.admin_whatsapp),
     notification_retention_days: readNumber(row.notification_retention_days, 30),
@@ -441,6 +474,7 @@ async function loadClientsFromSqlite(companyScope: string) {
         updated_by,
         deleted_at,
         remote_updated_at,
+        server_version,
         pending_sync,
         sync_status
       FROM clients
@@ -466,6 +500,8 @@ async function loadPaymentsFromSqlite(companyScope: string) {
         created_by,
         created_at,
         remote_updated_at,
+        server_version,
+        deleted_at,
         pending_sync,
         sync_status
       FROM payments
@@ -502,6 +538,7 @@ async function loadSettingsFromSqlite(companyScope: string) {
         updated_at,
         updated_by,
         remote_updated_at,
+        server_version,
         pending_sync,
         sync_status
       FROM admin_settings
@@ -661,7 +698,7 @@ function getCachePendingBreakdown() {
     adminSettings,
     activityLogs,
     notifications,
-    total: clients + payments + adminSettings + activityLogs + notifications,
+    total: clients + payments + adminSettings,
   };
 }
 
@@ -988,9 +1025,10 @@ async function upsertClients(clients: Client[], companyScope: string) {
           updated_by,
           deleted_at,
           remote_updated_at,
+          server_version,
           pending_sync,
           sync_status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           nom_complet = excluded.nom_complet,
           telephone = excluded.telephone,
@@ -1005,6 +1043,7 @@ async function upsertClients(clients: Client[], companyScope: string) {
           updated_by = excluded.updated_by,
           deleted_at = excluded.deleted_at,
           remote_updated_at = excluded.remote_updated_at,
+          server_version = excluded.server_version,
           pending_sync = excluded.pending_sync,
           sync_status = excluded.sync_status
         WHERE clients.company_id = excluded.company_id
@@ -1025,6 +1064,7 @@ async function upsertClients(clients: Client[], companyScope: string) {
         client.updated_by,
         client.deleted_at ?? null,
         client.remote_updated_at ?? null,
+        client.server_version ?? 0,
         client.pending_sync ? 1 : 0,
         client.sync_status,
       ],
@@ -1048,9 +1088,11 @@ async function upsertPayments(payments: Payment[], companyScope: string) {
           created_by,
           created_at,
           remote_updated_at,
+          server_version,
+          deleted_at,
           pending_sync,
           sync_status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           client_id = excluded.client_id,
           montant = excluded.montant,
@@ -1059,6 +1101,8 @@ async function upsertPayments(payments: Payment[], companyScope: string) {
           created_by = excluded.created_by,
           created_at = excluded.created_at,
           remote_updated_at = excluded.remote_updated_at,
+          server_version = excluded.server_version,
+          deleted_at = excluded.deleted_at,
           pending_sync = excluded.pending_sync,
           sync_status = excluded.sync_status
         WHERE payments.company_id = excluded.company_id
@@ -1073,6 +1117,8 @@ async function upsertPayments(payments: Payment[], companyScope: string) {
         payment.created_by,
         payment.created_at,
         payment.remote_updated_at ?? null,
+        payment.server_version ?? 0,
+        payment.deleted_at ?? null,
         payment.pending_sync ? 1 : 0,
         payment.sync_status,
       ],
@@ -1105,9 +1151,10 @@ async function upsertSettings(settings: AdminSettings, companyScope: string) {
         updated_at,
         updated_by,
         remote_updated_at,
+        server_version,
         pending_sync,
         sync_status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(company_id) DO UPDATE SET
         admin_email = excluded.admin_email,
         admin_whatsapp = excluded.admin_whatsapp,
@@ -1126,6 +1173,7 @@ async function upsertSettings(settings: AdminSettings, companyScope: string) {
         updated_at = excluded.updated_at,
         updated_by = excluded.updated_by,
         remote_updated_at = excluded.remote_updated_at,
+        server_version = excluded.server_version,
         pending_sync = excluded.pending_sync,
         sync_status = excluded.sync_status
       WHERE admin_settings.company_id = excluded.company_id
@@ -1150,6 +1198,7 @@ async function upsertSettings(settings: AdminSettings, companyScope: string) {
       settings.updated_at,
       settings.updated_by ?? "",
       settings.remote_updated_at ?? null,
+      settings.server_version ?? 0,
       settings.pending_sync ? 1 : 0,
       settings.sync_status,
     ],
@@ -1284,6 +1333,7 @@ async function mergeRemoteAdminSettings(
   const current = await loadSettingsFromSqlite(companyScope);
   const next: AdminSettings = {
     ...current,
+    server_version: Math.max(0, remoteSettings.version ?? current.server_version),
     admin_email:
       typeof remoteSettings.admin_email === "string"
         ? remoteSettings.admin_email
@@ -1315,6 +1365,7 @@ async function applyRemoteSyncData(result: SyncRemoteResult, companyScope: strin
   await upsertClients(
     result.clients.map((client) => ({
       ...client,
+      server_version: Math.max(0, client.version ?? 0),
       cinIssuedAt: client.cinIssuedAt ?? "",
       birthDate: client.birthDate ?? "",
       deleted_at: client.deleted_at ?? null,
@@ -1326,6 +1377,8 @@ async function applyRemoteSyncData(result: SyncRemoteResult, companyScope: strin
   await upsertPayments(
     result.payments.map((payment) => ({
       ...payment,
+      server_version: Math.max(0, payment.version ?? 0),
+      deleted_at: payment.deleted_at ?? null,
       pending_sync: false,
       sync_status: "synced" as const,
     })),
@@ -1791,6 +1844,7 @@ export async function resetSqliteDevelopmentData() {
 
   const companyScope = requireCurrentCompanyScope();
   const lastSyncKey = getScopedAppStateKey("last_sync", companyScope);
+  const cursorKey = syncCursorKey(companyScope);
   const db = await getDb();
   const settings = normalizeAdminSettings(cache.settings);
 
@@ -1798,11 +1852,14 @@ export async function resetSqliteDevelopmentData() {
   await db.execute("DELETE FROM activity_logs WHERE company_id = ?", [companyScope]);
   await db.execute("DELETE FROM payments WHERE company_id = ?", [companyScope]);
   await db.execute("DELETE FROM clients WHERE company_id = ?", [companyScope]);
+  await db.execute("DELETE FROM sync_outbox WHERE company_id = ?", [companyScope]);
+  await db.execute("DELETE FROM sync_conflicts WHERE company_id = ?", [companyScope]);
   await db.execute(
     "DELETE FROM local_users WHERE role = 'employe' AND company_id = ?",
     [companyScope],
   );
   await db.execute("DELETE FROM app_state WHERE key = ?", [lastSyncKey]);
+  await db.execute("DELETE FROM app_state WHERE key = ?", [cursorKey]);
   await db.execute(
     `
       UPDATE admin_settings
@@ -1916,10 +1973,12 @@ export const sqliteCachedClientService: ClientRepository = {
 
 export const sqliteCachedPaymentService: PaymentRepository = {
   getAll() {
-    return cache.payments;
+    return cache.payments.filter((payment) => !payment.deleted_at);
   },
   getByClientId(clientId) {
-    return cache.payments.filter((payment) => payment.client_id === clientId);
+    return cache.payments.filter(
+      (payment) => payment.client_id === clientId && !payment.deleted_at,
+    );
   },
   async create(input) {
     await initializeSqliteCache();
@@ -2020,6 +2079,497 @@ export const sqliteCachedNotificationService: NotificationRepository = {
   },
 };
 
+const SYNC_CURSOR_STATE_KEY = "sync_cursor";
+
+function syncCursorKey(companyScope: string) {
+  return getScopedAppStateKey(SYNC_CURSOR_STATE_KEY, companyScope);
+}
+
+async function readSyncCursor(companyScope: string) {
+  const db = await getDb();
+  const rows = await db.query<AppStateRow>(`
+    SELECT value FROM app_state WHERE key = ? LIMIT 1
+  `, [syncCursorKey(companyScope)]);
+  return readNullableString(rows[0]?.value);
+}
+
+async function writeSyncCursor(cursor: string, companyScope: string) {
+  await writeAppStateValue(syncCursorKey(companyScope), cursor);
+}
+
+function remoteClient(record: Record<string, unknown>): Client {
+  return {
+    id: readString(record.id),
+    server_version: Math.max(0, Math.trunc(readNumber(record.version))),
+    nom_complet: readString(record.nom_complet),
+    telephone: readString(record.telephone),
+    adresse: readString(record.adresse),
+    email: readString(record.email),
+    cin: readString(record.cin),
+    cinIssuedAt: readString(record.cinIssuedAt),
+    birthDate: readString(record.birthDate),
+    created_at: readString(record.created_at),
+    updated_at: readString(record.updated_at),
+    created_by: readString(record.created_by),
+    updated_by: readString(record.updated_by),
+    deleted_at: readNullableString(record.deleted_at),
+    remote_updated_at: readNullableString(record.remote_updated_at) ?? undefined,
+    pending_sync: false,
+    sync_status: "synced",
+  };
+}
+
+function remotePayment(record: Record<string, unknown>): Payment {
+  return {
+    id: readString(record.id),
+    server_version: Math.max(0, Math.trunc(readNumber(record.version))),
+    client_id: readString(record.client_id),
+    montant: readNumber(record.montant),
+    date_paiement: readString(record.date_paiement),
+    heure_paiement: readString(record.heure_paiement),
+    created_by: readString(record.created_by),
+    created_at: readString(record.created_at),
+    remote_updated_at: readNullableString(record.remote_updated_at) ?? undefined,
+    deleted_at: readNullableString(record.deleted_at),
+    pending_sync: false,
+    sync_status: "synced",
+  };
+}
+
+function remoteActivityLog(record: Record<string, unknown>): ActivityLog {
+  return {
+    id: readString(record.id),
+    user_id: readString(record.user_id),
+    user_name: readString(record.user_name),
+    action_type: readString(record.action_type),
+    description: readString(record.description),
+    entity_type: readString(record.entity_type),
+    entity_id: readString(record.entity_id),
+    created_at: readString(record.created_at),
+    pending_sync: false,
+    sync_status: "synced",
+  };
+}
+
+function remoteNotification(record: Record<string, unknown>): NotificationItem {
+  const backendStatus = readString(record.status, "pending");
+  return {
+    id: readString(record.id),
+    type: readString(record.type) === "whatsapp" ? "whatsapp" : "email",
+    recipient: readString(record.recipient),
+    subject: readString(record.subject),
+    body: readString(record.body),
+    payment_id: readString(record.payment_id),
+    status: backendStatus === "sent" || backendStatus === "failed"
+      ? backendStatus
+      : "queued",
+    error_message: readNullableString(record.error_message),
+    created_at: readString(record.created_at),
+    sent_at: readNullableString(record.sent_at),
+    pending_sync: false,
+    sync_status: "synced",
+  };
+}
+
+async function ensureBootstrapOutbox(
+  operation: Omit<SyncOutboxOperation, "operation_id" | "company_id" | "status" | "attempt_count" | "last_error" | "created_at" | "updated_at"> & {
+    company_id: string;
+  },
+) {
+  const existing = await syncOutboxSQLiteRepository.getForEntity(
+    operation.company_id,
+    operation.entity_type,
+    operation.entity_id,
+  );
+  if (!existing) {
+    await syncOutboxSQLiteRepository.upsert({
+      companyId: operation.company_id,
+      entityType: operation.entity_type,
+      entityId: operation.entity_id,
+      action: operation.action,
+      baseVersion: operation.base_version,
+      payload: operation.payload,
+    });
+    return;
+  }
+  const db = await getDb();
+  await db.execute(`
+    UPDATE sync_outbox
+    SET action = ?, base_version = ?, payload_json = ?, status = 'pending',
+        last_error = NULL, updated_at = ?
+    WHERE operation_id = ? AND company_id = ?
+  `, [
+    operation.action,
+    operation.base_version,
+    JSON.stringify(operation.payload),
+    new Date().toISOString(),
+    existing.operation_id,
+    operation.company_id,
+  ]);
+}
+
+async function reconcileBootstrapPendingRows(
+  companyScope: string,
+  localClients: Client[],
+  localPayments: Payment[],
+  localSettings: AdminSettings,
+  serverClients: Client[],
+  serverPayments: Payment[],
+  serverSettings: SyncRemoteAdminSettings | null,
+) {
+  const serverClientById = new Map(serverClients.map((client) => [client.id, client]));
+  const serverPaymentById = new Map(serverPayments.map((payment) => [payment.id, payment]));
+  const db = await getDb();
+
+  for (const client of localClients.filter(isPendingSync)) {
+    const server = serverClientById.get(client.id);
+    if (client.deleted_at && !server) {
+      const operation = await syncOutboxSQLiteRepository.getForEntity(companyScope, "client", client.id);
+      const statements: SqliteStatement[] = [
+        { sql: "DELETE FROM clients WHERE id = ? AND company_id = ?", params: [client.id, companyScope] },
+      ];
+      if (operation) statements.unshift(buildOutboxRemoveStatement(operation.operation_id));
+      await db.transaction(statements);
+      continue;
+    }
+    if (server) {
+      await db.execute(
+        "UPDATE clients SET server_version = ? WHERE id = ? AND company_id = ?",
+        [server.server_version, client.id, companyScope],
+      );
+    }
+    await ensureBootstrapOutbox({
+      company_id: companyScope,
+      entity_type: "client",
+      entity_id: client.id,
+      action: client.deleted_at ? "delete" : server ? "update" : "create",
+      base_version: server?.server_version ?? 0,
+      payload: toClientOperationPayload(client),
+    });
+  }
+
+  for (const payment of localPayments.filter(isPendingSync)) {
+    const server = serverPaymentById.get(payment.id);
+    if (payment.deleted_at && !server) {
+      const operation = await syncOutboxSQLiteRepository.getForEntity(companyScope, "payment", payment.id);
+      const statements: SqliteStatement[] = [
+        { sql: "DELETE FROM payments WHERE id = ? AND company_id = ?", params: [payment.id, companyScope] },
+      ];
+      if (operation) statements.unshift(buildOutboxRemoveStatement(operation.operation_id));
+      await db.transaction(statements);
+      continue;
+    }
+    if (server && !payment.deleted_at) {
+      const matchesServer =
+        payment.client_id === server.client_id &&
+        payment.montant === server.montant &&
+        payment.date_paiement === server.date_paiement &&
+        payment.heure_paiement === server.heure_paiement;
+      if (matchesServer) {
+        await upsertPayments([server], companyScope);
+        const operation = await syncOutboxSQLiteRepository.getForEntity(companyScope, "payment", payment.id);
+        if (operation) await syncOutboxSQLiteRepository.remove(operation.operation_id);
+      } else {
+        await ensureBootstrapOutbox({
+          company_id: companyScope,
+          entity_type: "payment",
+          entity_id: payment.id,
+          action: "create",
+          base_version: 0,
+          payload: toPaymentOperationPayload(payment),
+        });
+      }
+      continue;
+    }
+    if (server) {
+      await db.execute(
+        "UPDATE payments SET server_version = ? WHERE id = ? AND company_id = ?",
+        [server.server_version, payment.id, companyScope],
+      );
+    }
+    await ensureBootstrapOutbox({
+      company_id: companyScope,
+      entity_type: "payment",
+      entity_id: payment.id,
+      action: payment.deleted_at ? "delete" : "create",
+      base_version: server?.server_version ?? 0,
+      payload: toPaymentOperationPayload(payment),
+    });
+  }
+
+  if (isPendingSync(localSettings)) {
+    const serverVersion = Math.max(0, serverSettings?.version ?? 0);
+    await db.execute(
+      "UPDATE admin_settings SET server_version = ? WHERE company_id = ?",
+      [serverVersion, companyScope],
+    );
+    await ensureBootstrapOutbox({
+      company_id: companyScope,
+      entity_type: "adminSettings",
+      entity_id: getCompanySettingsId(companyScope),
+      action: "update",
+      base_version: serverVersion,
+      payload: {
+        admin_email: localSettings.admin_email,
+        admin_whatsapp: localSettings.admin_whatsapp,
+      },
+    });
+  }
+}
+
+async function applyBootstrapSnapshot(result: SyncBootstrapResult, companyScope: string) {
+  const localClients = await loadClientsFromSqlite(companyScope);
+  const localPayments = await loadPaymentsFromSqlite(companyScope);
+  const localSettings = await loadSettingsFromSqlite(companyScope);
+  const clients = result.clients.map((item) => remoteClient(item as unknown as Record<string, unknown>));
+  const payments = result.payments.map((item) => remotePayment(item as unknown as Record<string, unknown>));
+  const pendingClientIds = new Set(
+    localClients.filter(isPendingSync).map((client) => client.id),
+  );
+  const pendingPaymentIds = new Set(
+    localPayments.filter(isPendingSync).map((payment) => payment.id),
+  );
+  const db = await getDb();
+
+  await db.execute(
+    "DELETE FROM payments WHERE company_id = ? AND pending_sync = 0",
+    [companyScope],
+  );
+  await db.execute(
+    "DELETE FROM clients WHERE company_id = ? AND pending_sync = 0",
+    [companyScope],
+  );
+  await upsertClients(
+    clients.filter((client) => !pendingClientIds.has(client.id)),
+    companyScope,
+  );
+  await upsertPayments(
+    payments.filter((payment) => !pendingPaymentIds.has(payment.id)),
+    companyScope,
+  );
+
+  if (!isPendingSync(localSettings)) {
+    await mergeRemoteAdminSettings(result.adminSettings, companyScope);
+  }
+
+  await db.execute("DELETE FROM notification_queue WHERE company_id = ?", [companyScope]);
+  await db.execute("DELETE FROM activity_logs WHERE company_id = ?", [companyScope]);
+  await upsertNotifications(result.notifications.map((item) => ({ ...item, pending_sync: false, sync_status: "synced" })), companyScope);
+  await upsertLogs(result.activityLogs.map((item) => ({ ...item, pending_sync: false, sync_status: "synced" })), companyScope);
+  await reconcileBootstrapPendingRows(
+    companyScope,
+    localClients,
+    localPayments,
+    localSettings,
+    clients,
+    payments,
+    result.adminSettings,
+  );
+  await writeSyncCursor(result.next_cursor, companyScope);
+}
+
+async function markLocalEntityFailed(
+  entityType: SyncOperationResult["entity_type"],
+  entityId: string,
+  companyScope: string,
+) {
+  const table = entityType === "client"
+    ? "clients"
+    : entityType === "payment"
+      ? "payments"
+      : "admin_settings";
+  const db = await getDb();
+  await db.execute(
+    `UPDATE ${table} SET pending_sync = 1, sync_status = 'failed' WHERE ${entityType === "adminSettings" ? "company_id" : "id"} = ? AND company_id = ?`,
+    [entityType === "adminSettings" ? companyScope : entityId, companyScope],
+  );
+}
+
+async function applyServerRecord(
+  entityType: SyncOperationResult["entity_type"],
+  record: Record<string, unknown>,
+  companyScope: string,
+) {
+  if (entityType === "client") {
+    await upsertClients([remoteClient(record)], companyScope);
+    return;
+  }
+  if (entityType === "payment") {
+    await upsertPayments([remotePayment(record)], companyScope);
+    return;
+  }
+  await mergeRemoteAdminSettings({
+    id: readString(record.id),
+    version: readNumber(record.version),
+    admin_email: readString(record.admin_email),
+    admin_whatsapp: readString(record.admin_whatsapp),
+    updated_at: readString(record.updated_at),
+    updated_by: readString(record.updated_by),
+    remote_updated_at: readString(record.remote_updated_at),
+  }, companyScope);
+}
+
+async function processOperationResults(
+  operations: SyncOutboxOperation[],
+  results: SyncOperationResult[],
+  companyScope: string,
+) {
+  const operationById = new Map(operations.map((operation) => [operation.operation_id, operation]));
+  let synced = 0;
+  let conflicts = 0;
+  for (const result of results) {
+    const operation = operationById.get(result.operation_id);
+    if (!operation) continue;
+
+    if (result.status === "applied" || result.status === "duplicate") {
+      if (result.server_record) {
+        await applyServerRecord(result.entity_type, result.server_record, companyScope);
+      }
+      const db = await getDb();
+      await db.transaction([
+        buildOutboxRemoveStatement(operation.operation_id),
+        {
+          sql: "DELETE FROM sync_conflicts WHERE company_id = ? AND entity_type = ? AND entity_id = ?",
+          params: [companyScope, result.entity_type, result.entity_id],
+        },
+        {
+          sql: `DELETE FROM activity_logs
+            WHERE company_id = ? AND entity_type = ? AND entity_id = ? AND pending_sync = 1`,
+          params: [
+            companyScope,
+            result.entity_type === "adminSettings" ? "settings" : result.entity_type,
+            result.entity_id,
+          ],
+        },
+      ]);
+      synced += 1;
+      continue;
+    }
+
+    if (result.status === "conflict") {
+      const db = await getDb();
+      await db.transaction([
+        buildConflictUpsertStatement({
+          companyId: companyScope,
+          operationId: operation.operation_id,
+          entityType: operation.entity_type,
+          entityId: operation.entity_id,
+          localPayload: operation.payload,
+          serverPayload: result.server_record,
+          baseVersion: operation.base_version,
+          serverVersion: result.server_version,
+          message: result.message,
+        }),
+        {
+          sql: "UPDATE sync_outbox SET status = 'conflict', last_error = ?, updated_at = ? WHERE operation_id = ? AND company_id = ?",
+          params: [result.message, new Date().toISOString(), operation.operation_id, companyScope],
+        },
+      ]);
+      await markLocalEntityFailed(result.entity_type, result.entity_id, companyScope);
+      conflicts += 1;
+      continue;
+    }
+
+    await syncOutboxSQLiteRepository.markFailed(operation.operation_id, result.message);
+  }
+  return { synced, conflicts };
+}
+
+async function localPayloadForChange(change: SyncChange, companyScope: string) {
+  if (change.entity_type === "client") {
+    const item = (await loadClientsFromSqlite(companyScope)).find((client) => client.id === change.entity_id);
+    return item ? toClientOperationPayload(item) : {};
+  }
+  if (change.entity_type === "payment") {
+    const item = (await loadPaymentsFromSqlite(companyScope)).find((payment) => payment.id === change.entity_id);
+    return item ? toPaymentOperationPayload(item) : {};
+  }
+  if (change.entity_type === "adminSettings") {
+    const settings = await loadSettingsFromSqlite(companyScope);
+    return { admin_email: settings.admin_email, admin_whatsapp: settings.admin_whatsapp };
+  }
+  return {};
+}
+
+async function applyRemoteChange(change: SyncChange, companyScope: string) {
+  if (change.entity_type === "notification") {
+    if (change.payload) await upsertNotifications([remoteNotification(change.payload)], companyScope);
+    return true;
+  }
+  if (change.entity_type === "activityLog") {
+    if (change.payload) await upsertLogs([remoteActivityLog(change.payload)], companyScope);
+    return true;
+  }
+
+  const [operation, conflict] = await Promise.all([
+    syncOutboxSQLiteRepository.getForEntity(companyScope, change.entity_type, change.entity_id),
+    syncConflictSQLiteRepository.getForEntity(companyScope, change.entity_type, change.entity_id),
+  ]);
+  if (operation || conflict) {
+    if (!conflict && operation) {
+      await syncConflictSQLiteRepository.upsertConflict({
+        companyId: companyScope,
+        operationId: operation.operation_id,
+        entityType: operation.entity_type,
+        entityId: operation.entity_id,
+        localPayload: await localPayloadForChange(change, companyScope),
+        serverPayload: change.payload,
+        baseVersion: operation.base_version,
+        serverVersion: change.entity_version,
+        message: "Cette donnÃ©e a Ã©tÃ© modifiÃ©e sur un autre appareil.",
+      });
+      await syncOutboxSQLiteRepository.markConflict(
+        operation.operation_id,
+        "Cette donnÃ©e a Ã©tÃ© modifiÃ©e sur un autre appareil.",
+      );
+      await markLocalEntityFailed(operation.entity_type, operation.entity_id, companyScope);
+    }
+    return false;
+  }
+
+  const db = await getDb();
+  if (change.operation === "delete") {
+    if (change.entity_type === "client") {
+      await db.execute(`
+        UPDATE clients SET deleted_at = ?, server_version = ?, pending_sync = 0,
+          sync_status = 'synced'
+        WHERE id = ? AND company_id = ?
+      `, [readNullableString(change.payload?.deleted_at) ?? new Date().toISOString(), change.entity_version ?? 0, change.entity_id, companyScope]);
+    } else if (change.entity_type === "payment") {
+      await db.execute(`
+        UPDATE payments SET deleted_at = ?, server_version = ?, pending_sync = 0,
+          sync_status = 'synced'
+        WHERE id = ? AND company_id = ?
+      `, [readNullableString(change.payload?.deleted_at) ?? new Date().toISOString(), change.entity_version ?? 0, change.entity_id, companyScope]);
+    }
+    return true;
+  }
+
+  if (!change.payload) return false;
+  await applyServerRecord(change.entity_type, change.payload, companyScope);
+  return true;
+}
+
+async function pullAndApplyChanges(
+  syncDelegate: SqliteSyncDelegate,
+  initialCursor: string,
+  companyScope: string,
+) {
+  let cursor = initialCursor;
+  let changed = 0;
+  let hasMore = true;
+  while (hasMore) {
+    const result = await syncDelegate.pullChanges(cursor, 500);
+    for (const change of result.changes) {
+      if (await applyRemoteChange(change, companyScope)) changed += 1;
+    }
+    cursor = result.next_cursor;
+    await writeSyncCursor(cursor, companyScope);
+    hasMore = result.has_more;
+  }
+  return changed;
+}
+
 export function createSqliteCachedSyncService(syncDelegate: SqliteSyncDelegate): SyncRepository {
   return {
     getPendingCount() {
@@ -2042,25 +2592,44 @@ export function createSqliteCachedSyncService(syncDelegate: SqliteSyncDelegate):
         return { ok: false, synced: 0 };
       }
 
-      const snapshot = collectPendingSyncSnapshot();
-      const result = await syncDelegate.fullSync({
-        ...snapshot,
-        ...(cache.lastSync ? { since: cache.lastSync } : {}),
-      });
+      let cursor = await readSyncCursor(companyScope);
+      if (cursor === null) {
+        const bootstrap = await syncDelegate.bootstrap();
+        if (getCurrentCompanyScope() !== companyScope) {
+          throw new Error("Le contexte de sociÃ©tÃ© a changÃ© pendant la synchronisation.");
+        }
+        await applyBootstrapSnapshot(bootstrap, companyScope);
+        cursor = bootstrap.next_cursor;
+      }
+
+      const operations = await syncOutboxSQLiteRepository.listPending(companyScope);
+      let synced = 0;
+      let conflicts = 0;
+      if (operations.length > 0) {
+        const response = await syncDelegate.pushOperations(operations);
+        const processed = await processOperationResults(
+          operations,
+          response.results,
+          companyScope,
+        );
+        synced = processed.synced;
+        conflicts = processed.conflicts;
+      }
 
       if (getCurrentCompanyScope() !== companyScope) {
         throw new Error("Le contexte de société a changé pendant la synchronisation.");
       }
 
-      await applyRemoteSyncData(result, companyScope);
-      await markPushedSyncResults(snapshot, result.failedItems, companyScope);
-      await writeLastSync(result.serverTimestamp, companyScope);
+      const changed = await pullAndApplyChanges(syncDelegate, cursor, companyScope);
+      await writeLastSync(new Date().toISOString(), companyScope);
       await hydrateCacheFromSqlite(companyScope);
       emitCacheChange();
 
       return {
-        ok: result.success,
-        synced: totalSynced(result.synced),
+        ok: true,
+        synced,
+        conflicts,
+        changed,
       };
     },
   };

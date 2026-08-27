@@ -1,6 +1,7 @@
 import type { Syncable } from "./sync";
 
 export interface Client extends Syncable {
+  server_version: number;
   nom_complet: string;
   telephone: string;
   adresse: string;
@@ -18,6 +19,6 @@ export interface Client extends Syncable {
 
 export type ClientCreateInput = Omit<
   Client,
-  "id" | "created_at" | "updated_at" | "created_by" | "updated_by" | "pending_sync" | "sync_status" | "deleted_at" | "remote_updated_at"
+  "id" | "created_at" | "updated_at" | "created_by" | "updated_by" | "pending_sync" | "sync_status" | "deleted_at" | "remote_updated_at" | "server_version"
 >;
 export type ClientUpdateInput = Partial<ClientCreateInput>;

@@ -5,6 +5,9 @@ import type {
   NotificationItem,
   NotificationStatus,
   Payment,
+  SyncChange,
+  SyncOperationResult,
+  SyncOutboxOperation,
 } from "@/domain/types";
 import { apiFetch } from "@/infrastructure/remote/apiClient";
 
@@ -21,6 +24,7 @@ export interface SyncRemoteRequest {
 
 export interface SyncRemoteClient {
   id: string;
+  version: number;
   nom_complet: string;
   telephone: string;
   adresse: string;
@@ -38,6 +42,7 @@ export interface SyncRemoteClient {
 
 export interface SyncRemotePayment {
   id: string;
+  version: number;
   client_id: string;
   montant: number;
   date_paiement: string;
@@ -45,10 +50,12 @@ export interface SyncRemotePayment {
   created_by: string;
   created_at: string;
   remote_updated_at?: string;
+  deleted_at?: string | null;
 }
 
 export interface SyncRemoteAdminSettings {
   id?: string;
+  version: number;
   admin_email?: string;
   admin_whatsapp?: string;
   updated_at?: string;
@@ -114,6 +121,30 @@ interface BackendSyncFullResponse {
 export interface SyncRemoteResult
   extends Omit<BackendSyncFullResponse, "notifications"> {
   notifications: SyncRemoteNotification[];
+}
+
+export interface SyncBootstrapResult {
+  clients: SyncRemoteClient[];
+  payments: SyncRemotePayment[];
+  adminSettings: SyncRemoteAdminSettings | null;
+  activityLogs: SyncRemoteActivityLog[];
+  notifications: SyncRemoteNotification[];
+  next_cursor: string;
+}
+
+interface BackendSyncBootstrapResult
+  extends Omit<SyncBootstrapResult, "notifications"> {
+  notifications: BackendSyncNotification[];
+}
+
+export interface SyncOperationsResult {
+  results: SyncOperationResult[];
+}
+
+export interface SyncChangesResult {
+  changes: SyncChange[];
+  next_cursor: string;
+  has_more: boolean;
 }
 
 function toBackendNotificationStatus(
@@ -214,5 +245,38 @@ export const syncRemoteService = {
         status: toDesktopNotificationStatus(notification.status),
       })),
     };
+  },
+
+  async bootstrap(): Promise<SyncBootstrapResult> {
+    const result = await apiFetch<BackendSyncBootstrapResult>("/sync/bootstrap");
+    return {
+      ...result,
+      notifications: result.notifications.map((notification) => ({
+        ...notification,
+        status: toDesktopNotificationStatus(notification.status),
+      })),
+    };
+  },
+
+  async pushOperations(operations: SyncOutboxOperation[]): Promise<SyncOperationsResult> {
+    return apiFetch<SyncOperationsResult>("/sync/operations", {
+      method: "POST",
+      body: JSON.stringify({
+        operations: operations.map((operation) => ({
+          operation_id: operation.operation_id,
+          entity_type: operation.entity_type,
+          entity_id: operation.entity_id,
+          action: operation.action,
+          base_version: operation.base_version,
+          payload: operation.payload,
+        })),
+      }),
+    });
+  },
+
+  async pullChanges(after?: string, limit = 500): Promise<SyncChangesResult> {
+    const query = new URLSearchParams({ limit: String(limit) });
+    if (after !== undefined) query.set("after", after);
+    return apiFetch<SyncChangesResult>(`/sync/changes?${query.toString()}`);
   },
 };

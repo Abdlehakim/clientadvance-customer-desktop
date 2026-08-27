@@ -31,6 +31,7 @@ export interface SqliteExecuteResult {
 export interface SqliteDatabaseClient {
   execute(sql: string, params?: SqliteParam[]): Promise<SqliteExecuteResult>;
   query<T extends SqliteRow = SqliteRow>(sql: string, params?: SqliteParam[]): Promise<T[]>;
+  transaction(statements: SqliteStatement[]): Promise<SqliteExecuteResult[]>;
 }
 
 interface TauriInvoke {
@@ -182,11 +183,21 @@ export async function sqliteQuery<T extends SqliteRow = SqliteRow>(
   });
 }
 
+export async function sqliteTransaction(statements: SqliteStatement[]) {
+  return invokeSqliteCommand<SqliteExecuteResult[]>("sqlite_transaction", {
+    statements: statements.map((statement) => ({
+      sql: statement.sql,
+      params: statement.params ?? [],
+    })),
+  });
+}
+
 export async function getDb(): Promise<SqliteDatabaseClient> {
   await initializeSqliteDatabase();
 
   return {
     execute: sqliteExecute,
     query: sqliteQuery,
+    transaction: sqliteTransaction,
   };
 }

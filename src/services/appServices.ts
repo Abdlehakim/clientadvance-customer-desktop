@@ -76,6 +76,9 @@ export const SQLITE_STORAGE_REQUIRED_MESSAGE =
 export const authService = authRemoteRepository;
 const sqliteSyncService = createSqliteCachedSyncService({
   fullSync: syncRemoteService.fullSync,
+  bootstrap: syncRemoteService.bootstrap,
+  pushOperations: syncRemoteService.pushOperations,
+  pullChanges: syncRemoteService.pullChanges,
   setOnlineMode: setConnectionTestOverride,
   isOnlineMode: isConnectionOnline,
 });

@@ -611,12 +611,18 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
         const result = await Promise.resolve(syncPendingData());
 
         if (!result.ok) {
-          toast.error("Impossible de synchroniser : hors ligne");
-          await showNotificationDeliveryToasts();
+          if (mode === "manual") {
+            toast.error("Impossible de synchroniser : hors ligne");
+            await showNotificationDeliveryToasts();
+          }
           return;
         }
 
         const pendingAfter = getPendingCount();
+
+        if (mode === "auto") {
+          return;
+        }
 
         if (pendingBefore > 0 && pendingAfter > 0) {
           toast.error(
@@ -626,8 +632,6 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
           );
         } else if (pendingBefore > 0 && result.synced === 0 && pendingAfter === 0) {
           toast.success("Synchronisation terminée.");
-        } else if (mode === "auto") {
-          toast.success(`Synchronisation automatique terminée (${result.synced} éléments)`);
         } else {
           toast.success(`Synchronisation terminée (${result.synced} éléments)`);
         }
@@ -639,9 +643,11 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
             ? error.message
             : "Synchronisation impossible. Serveur indisponible.";
 
-        toast.error(message);
+        if (mode === "manual") {
+          toast.error(message);
+        }
 
-        if (message === "Synchronisation impossible. Serveur indisponible.") {
+        if (mode === "manual" && message === "Synchronisation impossible. Serveur indisponible.") {
           await showNotificationDeliveryToasts();
         }
       } finally {
@@ -653,32 +659,29 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   };
 
   useEffect(() => {
-    if (
-      !shouldRenderProtectedApp ||
-      !user ||
-      !online ||
-      !backendSyncEnabled ||
-      pending <= 0
-    ) {
+    if (!shouldRenderProtectedApp || !user || !online || !backendSyncEnabled) {
       clearAutoSyncTimeout();
       return;
     }
 
-    clearAutoSyncTimeout();
-    autoSyncTimeoutRef.current = setTimeout(() => {
-      autoSyncTimeoutRef.current = null;
-
-      if (!backendSyncEnabled || !isOnline() || getPendingCount() <= 0) {
-        return;
-      }
-
-      void runSync("auto");
-    }, 2000);
+    let cancelled = false;
+    const schedule = (delay: number) => {
+      clearAutoSyncTimeout();
+      autoSyncTimeoutRef.current = setTimeout(() => {
+        autoSyncTimeoutRef.current = null;
+        if (cancelled || !backendSyncEnabled || !isOnline()) return;
+        void runSync("auto").finally(() => {
+          if (!cancelled) schedule(4000);
+        });
+      }, delay);
+    };
+    schedule(0);
 
     return () => {
+      cancelled = true;
       clearAutoSyncTimeout();
     };
-  }, [backendSyncEnabled, online, pending, shouldRenderProtectedApp, user]);
+  }, [backendSyncEnabled, online, shouldRenderProtectedApp, userSessionKey]);
 
   useEffect(() => {
     if (

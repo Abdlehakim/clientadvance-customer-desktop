@@ -8,12 +8,14 @@ import {
 import {
   applyAdminSettingsUpdate,
   createAdminSettingsFallback,
+  didSyncableAdminSettingsChange,
   normalizeSmtpPasswordValue,
   normalizeAdminSettings,
 } from "@/infrastructure/local/adminSettingsState";
 import { getStoredSmtpPassword, persistStoredSmtpPassword } from "@/infrastructure/local/smtpPasswordStorage";
 import { activityLogSQLiteRepository } from "./activityLogSQLiteRepository";
 import { getDb, type SqliteRow } from "./sqliteClient";
+import { buildOutboxUpsertStatement } from "./syncOutboxSQLiteRepository";
 
 interface AdminSettingsSqliteRow extends SqliteRow {
   id: unknown;
@@ -34,6 +36,7 @@ interface AdminSettingsSqliteRow extends SqliteRow {
   updated_at: unknown;
   updated_by: unknown;
   remote_updated_at: unknown;
+  server_version: unknown;
   pending_sync: unknown;
   sync_status: unknown;
 }
@@ -91,6 +94,7 @@ function readSyncStatus(value: unknown): AdminSettings["sync_status"] {
 function toAdminSettings(row: AdminSettingsSqliteRow, settingsId: string): AdminSettings {
   return normalizeAdminSettings({
     id: readString(row.id, settingsId),
+    server_version: Math.max(0, Math.trunc(readNumber(row.server_version, 0))),
     admin_email: readString(row.admin_email),
     admin_whatsapp: readString(row.admin_whatsapp),
     notification_retention_days: readNumber(row.notification_retention_days, 30),
@@ -139,6 +143,7 @@ export const adminSettingsSQLiteRepository: AdminSettingsRepository = {
           updated_at,
           updated_by,
           remote_updated_at,
+          server_version,
           pending_sync,
           sync_status
         FROM admin_settings
@@ -161,6 +166,7 @@ export const adminSettingsSQLiteRepository: AdminSettingsRepository = {
 
     const current = await this.get();
     const updatedAt = new Date().toISOString();
+    const syncableChanged = didSyncableAdminSettingsChange(current, patch);
     const nextPassword = normalizeSmtpPasswordValue(patch.smtp_password);
     const hasStoredPassword = (await getStoredSmtpPassword()).length > 0;
     const next = { ...applyAdminSettingsUpdate(current, patch, {
@@ -176,8 +182,8 @@ export const adminSettingsSQLiteRepository: AdminSettingsRepository = {
       await persistStoredSmtpPassword(nextPassword);
     }
 
-    await db.execute(
-      `
+    const settingsStatement = {
+      sql: `
         INSERT INTO admin_settings (
           id,
           company_id,
@@ -198,9 +204,10 @@ export const adminSettingsSQLiteRepository: AdminSettingsRepository = {
           updated_at,
           updated_by,
           remote_updated_at,
+          server_version,
           pending_sync,
           sync_status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(company_id) DO UPDATE SET
           admin_email = excluded.admin_email,
           admin_whatsapp = excluded.admin_whatsapp,
@@ -219,11 +226,12 @@ export const adminSettingsSQLiteRepository: AdminSettingsRepository = {
           updated_at = excluded.updated_at,
           updated_by = excluded.updated_by,
           remote_updated_at = excluded.remote_updated_at,
+          server_version = admin_settings.server_version,
           pending_sync = excluded.pending_sync,
           sync_status = excluded.sync_status
         WHERE admin_settings.company_id = excluded.company_id
       `,
-      [
+      params: [
         next.id,
         companyScope,
         next.admin_email,
@@ -243,10 +251,29 @@ export const adminSettingsSQLiteRepository: AdminSettingsRepository = {
         next.updated_at,
         next.updated_by ?? "",
         next.remote_updated_at ?? null,
+        next.server_version,
         next.pending_sync ? 1 : 0,
         next.sync_status,
       ],
-    );
+    };
+
+    await db.transaction([
+      settingsStatement,
+      ...(syncableChanged
+        ? [buildOutboxUpsertStatement({
+            companyId: companyScope,
+            entityType: "adminSettings" as const,
+            entityId: settingsId,
+            action: "update" as const,
+            baseVersion: current.server_version,
+            payload: {
+              admin_email: next.admin_email,
+              admin_whatsapp: next.admin_whatsapp,
+            },
+            now: updatedAt,
+          })]
+        : []),
+    ]);
 
     await activityLogSQLiteRepository.create({
       user_id: user?.id ?? "",

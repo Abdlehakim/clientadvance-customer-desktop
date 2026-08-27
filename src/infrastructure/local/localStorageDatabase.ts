@@ -84,7 +84,26 @@ export function clearLocalStorageKeys(
   }
 }
 
-export const uid = () => Math.random().toString(36).slice(2, 10);
+export function uid() {
+  const secureCrypto = globalThis.crypto;
+
+  if (typeof secureCrypto?.randomUUID === "function") {
+    return secureCrypto.randomUUID();
+  }
+
+  if (typeof secureCrypto?.getRandomValues !== "function") {
+    throw new Error("Secure random UUID generation is unavailable.");
+  }
+
+  const bytes = secureCrypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6]! & 0x0f) | 0x40;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (value) => value.toString(16).padStart(2, "0"));
+
+  return `${hex.slice(0, 4).join("")}-${hex.slice(4, 6).join("")}-${hex
+    .slice(6, 8)
+    .join("")}-${hex.slice(8, 10).join("")}-${hex.slice(10).join("")}`;
+}
 
 export function seedIfNeeded() {
   return;
