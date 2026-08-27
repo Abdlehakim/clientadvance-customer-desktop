@@ -108,6 +108,7 @@ interface SyncPushResponse {
 interface SyncPullResponse {
   clients: Array<{
     id: string;
+    version: number;
     nom_complet: string;
     telephone: string;
     adresse: string;
@@ -124,6 +125,7 @@ interface SyncPullResponse {
   }>;
   payments: Array<{
     id: string;
+    version: number;
     client_id: string;
     montant: number;
     date_paiement: string;
@@ -131,9 +133,11 @@ interface SyncPullResponse {
     created_by: string;
     created_at: string;
     remote_updated_at?: string;
+    deleted_at?: string | null;
   }>;
   adminSettings: {
     id: string;
+    version: number;
     admin_email: string;
     admin_whatsapp: string;
     updated_at: string;
@@ -167,6 +171,7 @@ interface SyncPullResponse {
 
 const EMPTY_SETTINGS: AdminSettings = {
   id: "settings_default",
+  server_version: 0,
   admin_email: "",
   admin_whatsapp: "",
   notification_retention_days: 30,
@@ -441,6 +446,7 @@ function upsertClients(pulledClients: SyncPullResponse["clients"]) {
 
     const nextClient: Client = {
       id: serverClient.id,
+      server_version: serverClient.version,
       nom_complet: serverClient.nom_complet,
       telephone: serverClient.telephone,
       adresse: serverClient.adresse,
@@ -476,6 +482,7 @@ function upsertPayments(pulledPayments: SyncPullResponse["payments"]) {
 
     const nextPayment: Payment = {
       id: serverPayment.id,
+      server_version: serverPayment.version,
       client_id: serverPayment.client_id,
       montant: serverPayment.montant,
       date_paiement: serverPayment.date_paiement,
@@ -483,6 +490,7 @@ function upsertPayments(pulledPayments: SyncPullResponse["payments"]) {
       created_by: local?.created_by || serverPayment.created_by,
       created_at: serverPayment.created_at,
       remote_updated_at: serverPayment.remote_updated_at,
+      deleted_at: serverPayment.deleted_at ?? null,
       pending_sync: false,
       sync_status: "synced",
     };
@@ -503,6 +511,7 @@ function upsertSettings(pulledSettings: SyncPullResponse["adminSettings"]) {
   return {
     ...localSettings,
     id: pulledSettings.id,
+    server_version: pulledSettings.version,
     admin_email: pulledSettings.admin_email,
     admin_whatsapp: pulledSettings.admin_whatsapp,
     server_mode: pulledSettings.server_mode ?? localSettings.server_mode,

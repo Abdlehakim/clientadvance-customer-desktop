@@ -27,6 +27,7 @@ export const clientLocalRepository: ClientRepository = {
     const client: Client = {
       ...nextInput,
       id: uid(),
+      server_version: 0,
       created_at: now,
       updated_at: now,
       created_by: user?.name ?? "—",

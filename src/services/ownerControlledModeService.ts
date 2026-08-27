@@ -58,6 +58,7 @@ interface AdminSettingsSqliteRow extends SqliteRow {
   updated_at: unknown;
   updated_by: unknown;
   remote_updated_at: unknown;
+  server_version: unknown;
   pending_sync: unknown;
   sync_status: unknown;
 }
@@ -281,6 +282,7 @@ function readSyncStatus(value: unknown): AdminSettings["sync_status"] {
 function rowToAdminSettings(row: AdminSettingsSqliteRow): AdminSettings {
   return normalizeAdminSettings({
     id: readString(row.id, SETTINGS_ID),
+    server_version: Math.max(0, Math.trunc(readNumber(row.server_version, 0))),
     admin_email: readString(row.admin_email),
     admin_whatsapp: readString(row.admin_whatsapp),
     notification_retention_days: readNumber(row.notification_retention_days, 30),
@@ -326,6 +328,7 @@ async function readSqliteSettings() {
         updated_at,
         updated_by,
         remote_updated_at,
+        server_version,
         pending_sync,
         sync_status
       FROM admin_settings

@@ -47,9 +47,11 @@ export const paymentLocalRepository: PaymentRepository = {
     const payment: Payment = {
       ...input,
       id: uid(),
+      server_version: 0,
       created_by: user?.name ?? "-",
       created_at: now,
       remote_updated_at: now,
+      deleted_at: null,
       pending_sync: true,
       sync_status: "pending",
     };
